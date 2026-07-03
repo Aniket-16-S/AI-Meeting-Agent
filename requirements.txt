@@ -5,3 +5,9 @@ sqlalchemy
 asyncpg
 PyPDF2
 python-dotenv
+langchain
+langchain-google-genai
+langchain-core
+langgraph
+pydantic
+langchain-groq

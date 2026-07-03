@@ -3,3 +3,14 @@ app/utils/__pycache__
 .env
 temp_show_table.py
 Implementation plan.md
+test_dataset/
+delete_cache_and_run.py
+
+app\__pycache__
+old prompt.txt
+
+
+frontend/node_modules
+frontend/.next
+
+node_modules/
