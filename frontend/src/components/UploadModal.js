@@ -1,7 +1,8 @@
 'use client';
 import { useState, useRef, useCallback } from 'react';
-import { uploadFiles } from '@/lib/api';
+import { uploadFiles, fetchMeetings } from '@/lib/api';
 import { useToast } from './Toast';
+import { useAuth } from '@/lib/AuthContext';
 
 export default function UploadModal({ onClose, onSuccess }) {
   const [files, setFiles] = useState([]);
@@ -10,6 +11,7 @@ export default function UploadModal({ onClose, onSuccess }) {
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef(null);
   const { addToast } = useToast();
+  const { department, linkMeetingToDepartment, isMeetingInDepartment } = useAuth();
 
   const handleFiles = useCallback((incoming) => {
     const arr = Array.from(incoming);
@@ -35,11 +37,39 @@ export default function UploadModal({ onClose, onSuccess }) {
       setResults(data.results);
 
       let hasNew = false;
+      const hasSkipped = data.results.some((r) => r.status === 'skipped');
+      let allMeetings = [];
+      
+      if (hasSkipped) {
+        try {
+          allMeetings = await fetchMeetings();
+        } catch (e) {
+          console.error("Failed to fetch meetings for idempotency resolution", e);
+        }
+      }
+
       data.results.forEach((r) => {
         if (r.status === 'skipped') {
-          addToast(`"${r.filename}" already processed. Loaded existing data.`, 'warning');
+          const matching = allMeetings.find(
+            (m) => m.file_name === r.filename || m.title === r.filename
+          );
+          if (matching && department) {
+            const alreadyLinked = isMeetingInDepartment(matching.id, department.id);
+            if (alreadyLinked) {
+              addToast(`"${r.filename}" is already linked to your department.`, 'warning');
+            } else {
+              linkMeetingToDepartment(matching.id, department.id);
+              hasNew = true;
+              addToast('Meeting already exists and has been linked to your department.', 'success');
+            }
+          } else {
+            addToast(`"${r.filename}" already processed.`, 'warning');
+          }
         } else if (r.status === 'processed') {
           hasNew = true;
+          if (r.meeting_id && department) {
+            linkMeetingToDepartment(r.meeting_id, department.id);
+          }
           addToast(`"${r.filename}" processed successfully!`, 'success');
         } else if (r.status === 'error') {
           addToast(`"${r.filename}": ${r.reason}`, 'error');
@@ -53,6 +83,7 @@ export default function UploadModal({ onClose, onSuccess }) {
       setUploading(false);
     }
   };
+
 
   const fileIcon = (name) => {
     if (name.endsWith('.pdf')) return '📄';

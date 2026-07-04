@@ -54,3 +54,13 @@ export async function queryAgent(question) {
   if (!res.ok) throw new Error('Query failed');
   return res.json();
 }
+
+export async function updateTaskStatus(taskId, status) {
+  const res = await fetch(`${API_BASE}/tasks/${taskId}/status`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  });
+  if (!res.ok) throw new Error('Failed to update task status');
+  return res.json();
+}

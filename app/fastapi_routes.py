@@ -14,6 +14,7 @@ from app.database_service import (
     get_all_tasks,
     get_meeting_by_id,
     get_all_risks,
+    update_task_status,
 )
 from app.llm_service import extract_meeting_data
 from app.query_service import process_natural_language_query
@@ -126,6 +127,19 @@ async def get_meeting(meeting_id: str):
 async def get_tasks(meeting_id: str = None):
     tasks = await get_all_tasks(meeting_id)
     return {"tasks": tasks}
+
+
+@router.put("/tasks/{task_id}/status")
+async def update_task_status_route(task_id: str, payload: dict):
+    status = payload.get("status")
+    if not status or status not in ("Open", "Closed"):
+        raise HTTPException(status_code=400, detail="Invalid status value. Must be 'Open' or 'Closed'")
+    try:
+        await update_task_status(task_id, status)
+        return {"status": "success", "message": f"Task status updated to {status}"}
+    except Exception as e:
+        logger.error(f"Failed to update task status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/risks")

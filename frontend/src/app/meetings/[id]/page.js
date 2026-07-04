@@ -1,20 +1,22 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { fetchMeeting, fetchTasks, fetchRisks } from '@/lib/api';
+import { fetchMeeting, fetchTasks, fetchRisks, updateTaskStatus } from '@/lib/api';
 import Tabs from '@/components/Tabs';
 import PriorityBadge from '@/components/PriorityBadge';
 import StatusBadge from '@/components/StatusBadge';
 import EmptyState from '@/components/EmptyState';
 import { SkeletonTable } from '@/components/SkeletonLoader';
+import EntityResolutionBadge from '@/components/EntityResolutionBadge';
+import { useToast } from '@/components/Toast';
 
 function formatDate(d) {
-  if (!d) return '—';
+  if (!d) return '-';
   try {
     return new Date(d).toLocaleDateString('en-US', {
       month: 'short', day: 'numeric', year: 'numeric',
     });
-  } catch { return '—'; }
+  } catch { return '-'; }
 }
 
 function formatTime(t) {
@@ -28,7 +30,7 @@ function formatTime(t) {
   } catch { return t; }
 }
 
-function TasksTab({ tasks }) {
+function TasksTab({ tasks, onToggleComplete }) {
   if (!tasks?.length) {
     return (
       <EmptyState
@@ -50,18 +52,15 @@ function TasksTab({ tasks }) {
             <th>Category</th>
             <th>Due Date</th>
             <th>Status</th>
+            <th style={{ textAlign: 'right' }}>Actions</th>
           </tr>
         </thead>
         <tbody>
           {tasks.map((t) => (
             <tr key={t.id}>
               <td className="td-description">{t.task_description}</td>
-              <td className="td-owner">
-                {t.owner === 'Unassigned' || !t.owner ? (
-                  <span className="owner-unassigned">Unassigned</span>
-                ) : (
-                  t.owner
-                )}
+              <td>
+                <EntityResolutionBadge ownerName={t.owner} />
               </td>
               <td><PriorityBadge level={t.priority} /></td>
               <td><span className="category-badge">{t.category}</span></td>
@@ -80,6 +79,18 @@ function TasksTab({ tasks }) {
                 )}
               </td>
               <td><StatusBadge status={t.status} /></td>
+              <td style={{ textAlign: 'right' }}>
+                {t.status === 'Open' ? (
+                  <button
+                    onClick={() => onToggleComplete(t.id, t.status)}
+                    className="btn-complete"
+                  >
+                    ✓ Mark Complete
+                  </button>
+                ) : (
+                  <span className="text-completed">✓ Completed</span>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -87,6 +98,7 @@ function TasksTab({ tasks }) {
     </div>
   );
 }
+
 
 function RisksTab({ risks }) {
   if (!risks?.length) {
@@ -138,11 +150,31 @@ function TranscriptTab({ transcript }) {
 export default function MeetingDetailPage() {
   const params = useParams();
   const meetingId = params.id;
+  const { department, isMeetingInDepartment } = useAuth();
+  const { addToast } = useToast();
 
   const [meeting, setMeeting] = useState(null);
   const [tasks, setTasks] = useState(null);
   const [risks, setRisks] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  const handleToggleComplete = async (taskId, currentStatus) => {
+    const newStatus = currentStatus === 'Open' ? 'Closed' : 'Open';
+    try {
+      await updateTaskStatus(taskId, newStatus);
+      setTasks((prevTasks) =>
+        prevTasks?.map((t) => (t.id === taskId ? { ...t, status: newStatus } : t))
+      );
+      addToast(
+        newStatus === 'Closed'
+          ? 'Task marked as completed!'
+          : 'Task reopened!',
+        'success'
+      );
+    } catch (err) {
+      addToast(err.message || 'Failed to update task status', 'error');
+    }
+  };
 
   useEffect(() => {
     Promise.all([
@@ -155,9 +187,11 @@ export default function MeetingDetailPage() {
         setTasks(t);
         setRisks(r);
       })
-      .catch(() => {})
+      .catch(() => { })
       .finally(() => setLoading(false));
   }, [meetingId]);
+
+  const hasAccess = isMeetingInDepartment(meetingId, department?.id);
 
   if (loading) {
     return (
@@ -167,6 +201,18 @@ export default function MeetingDetailPage() {
           <div className="skeleton skeleton-line short" style={{ height: 14, marginTop: 8 }} />
         </div>
         <SkeletonTable rows={6} cols={5} />
+      </div>
+    );
+  }
+
+  if (!hasAccess) {
+    return (
+      <div className="page-animate">
+        <EmptyState
+          icon="🚫"
+          title="Access Denied"
+          text="You do not have access to view this meeting transcript, or it belongs to a different department."
+        />
       </div>
     );
   }
@@ -182,6 +228,7 @@ export default function MeetingDetailPage() {
       </div>
     );
   }
+
 
   return (
     <div className="page-animate">
@@ -209,7 +256,7 @@ export default function MeetingDetailPage() {
             label: 'Tasks',
             icon: '📋',
             count: tasks?.length || 0,
-            content: <TasksTab tasks={tasks} />,
+            content: <TasksTab tasks={tasks} onToggleComplete={handleToggleComplete} />,
           },
           {
             label: 'Risks',

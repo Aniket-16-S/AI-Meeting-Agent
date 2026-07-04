@@ -304,6 +304,15 @@ async def get_all_risks(meeting_id: str = None):
         return [dict(row) for row in result.mappings().all()]
 
 
+async def update_task_status(task_id: str, status: str):
+    async with async_session_factory() as session:
+        await session.execute(
+            text("UPDATE tasks SET status = :status WHERE id = :id"),
+            {"status": status, "id": task_id},
+        )
+        await session.commit()
+
+
 async def execute_dynamic_query(filters: dict):
     target_table = filters.get("target_table", "tasks")
     meeting_id   = filters.get("meeting_id")

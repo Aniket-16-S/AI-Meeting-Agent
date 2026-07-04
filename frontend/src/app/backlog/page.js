@@ -1,22 +1,27 @@
 'use client';
 import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
-import { fetchTasks, fetchMeetings } from '@/lib/api';
+import { fetchTasks, fetchMeetings, updateTaskStatus } from '@/lib/api';
 import PriorityBadge from '@/components/PriorityBadge';
 import StatusBadge from '@/components/StatusBadge';
 import EmptyState from '@/components/EmptyState';
 import { SkeletonTable } from '@/components/SkeletonLoader';
+import EntityResolutionBadge from '@/components/EntityResolutionBadge';
+import { useAuth } from '@/lib/AuthContext';
+import { useToast } from '@/components/Toast';
 
 function formatDate(d) {
-  if (!d) return '—';
+  if (!d) return '-';
   try {
     return new Date(d).toLocaleDateString('en-US', {
       month: 'short', day: 'numeric', year: 'numeric',
     });
-  } catch { return '—'; }
+  } catch { return '-'; }
 }
 
 export default function BacklogPage() {
+  const { department, getDepartmentMeetingIds } = useAuth();
+  const { addToast } = useToast();
   const [tasks, setTasks] = useState(null);
   const [meetings, setMeetings] = useState({});
   const [loading, setLoading] = useState(true);
@@ -27,6 +32,24 @@ export default function BacklogPage() {
   const [filterOwner, setFilterOwner] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
 
+  const handleToggleComplete = async (taskId, currentStatus) => {
+    const newStatus = currentStatus === 'Open' ? 'Closed' : 'Open';
+    try {
+      await updateTaskStatus(taskId, newStatus);
+      setTasks((prevTasks) =>
+        prevTasks?.map((t) => (t.id === taskId ? { ...t, status: newStatus } : t))
+      );
+      addToast(
+        newStatus === 'Closed'
+          ? 'Task marked as completed!'
+          : 'Task reopened!',
+        'success'
+      );
+    } catch (err) {
+      addToast(err.message || 'Failed to update task status', 'error');
+    }
+  };
+
   useEffect(() => {
     Promise.all([fetchTasks(), fetchMeetings()])
       .then(([t, m]) => {
@@ -35,13 +58,19 @@ export default function BacklogPage() {
         m.forEach((mtg) => { map[mtg.id] = mtg; });
         setMeetings(map);
       })
-      .catch(() => {})
+      .catch(() => { })
       .finally(() => setLoading(false));
   }, []);
 
+  // Filter tasks belonging to active department
+  const filteredDeptTasks = useMemo(() => {
+    if (!tasks || !department) return [];
+    const deptMtgIds = getDepartmentMeetingIds(department.id);
+    return tasks.filter((t) => deptMtgIds.includes(t.meeting_id));
+  }, [tasks, department, getDepartmentMeetingIds]);
+
   const filtered = useMemo(() => {
-    if (!tasks) return [];
-    return tasks.filter((t) => {
+    return filteredDeptTasks.filter((t) => {
       if (filterPriority && t.priority !== filterPriority) return false;
       if (filterCategory && t.category !== filterCategory) return false;
       if (filterStatus && t.status !== filterStatus) return false;
@@ -51,7 +80,7 @@ export default function BacklogPage() {
       }
       return true;
     });
-  }, [tasks, filterPriority, filterCategory, filterOwner, filterStatus]);
+  }, [filteredDeptTasks, filterPriority, filterCategory, filterOwner, filterStatus]);
 
   if (loading) {
     return (
@@ -69,7 +98,7 @@ export default function BacklogPage() {
       <div className="page-header">
         <h1 className="page-title">Global Backlog</h1>
         <p className="page-subtitle">
-          {filtered.length} of {tasks?.length || 0} tasks
+          {filtered.length} of {filteredDeptTasks.length} tasks in {department?.name}
         </p>
       </div>
 
@@ -122,7 +151,7 @@ export default function BacklogPage() {
         <EmptyState
           icon="🔍"
           title="No tasks match your filters"
-          text={tasks?.length ? 'Try adjusting your filters to see more results.' : 'Upload a meeting transcript to populate the backlog.'}
+          text={filteredDeptTasks.length ? 'Try adjusting your filters to see more results.' : 'Upload a meeting transcript in this department to populate the backlog.'}
         />
       ) : (
         <div className="data-table-wrapper">
@@ -136,6 +165,7 @@ export default function BacklogPage() {
                 <th>Due Date</th>
                 <th>Status</th>
                 <th>Meeting</th>
+                <th style={{ textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -144,18 +174,14 @@ export default function BacklogPage() {
                 return (
                   <tr key={t.id}>
                     <td className="td-description">{t.task_description}</td>
-                    <td className="td-owner">
-                      {t.owner === 'Unassigned' || !t.owner ? (
-                        <span className="owner-unassigned">Unassigned</span>
-                      ) : (
-                        t.owner
-                      )}
+                    <td>
+                      <EntityResolutionBadge ownerName={t.owner} />
                     </td>
                     <td><PriorityBadge level={t.priority} /></td>
                     <td><span className="category-badge">{t.category}</span></td>
                     <td className="td-date">
                       {t.due_date ? formatDate(t.due_date) : (
-                        <span style={{ color: 'var(--text-tertiary)' }}>—</span>
+                        <span style={{ color: 'var(--text-tertiary)' }}>-</span>
                       )}
                     </td>
                     <td><StatusBadge status={t.status} /></td>
@@ -170,7 +196,19 @@ export default function BacklogPage() {
                           {(mtg.title || mtg.file_name || '').length > 20 ? '…' : ''}
                         </Link>
                       ) : (
-                        <span style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>—</span>
+                        <span style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>-</span>
+                      )}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      {t.status === 'Open' ? (
+                        <button
+                          onClick={() => handleToggleComplete(t.id, t.status)}
+                          className="btn-complete"
+                        >
+                          ✓ Mark Complete
+                        </button>
+                      ) : (
+                        <span className="text-completed">✓ Completed</span>
                       )}
                     </td>
                   </tr>
