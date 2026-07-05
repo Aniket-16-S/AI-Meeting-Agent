@@ -11,3 +11,7 @@ langchain-core
 langgraph
 pydantic
 langchain-groq
+pika
+google-api-core
+google-cloud-core
+bcrypt

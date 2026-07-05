@@ -9,13 +9,14 @@ export default function RegisterPage() {
   const [adminName, setAdminName] = useState('');
   const [adminEmail, setAdminEmail] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
+  const [adminDepartment, setAdminDepartment] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const { registerOrg } = useAuth();
   const { addToast } = useToast();
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!orgName || !adminName || !adminEmail || !adminPassword) {
+    if (!orgName || !adminName || !adminEmail || !adminPassword || !adminDepartment) {
       addToast('Please fill in all fields', 'warning');
       return;
     }
@@ -25,7 +26,7 @@ export default function RegisterPage() {
     }
     setSubmitting(true);
     try {
-      registerOrg(orgName, adminName, adminEmail, adminPassword);
+      await registerOrg(orgName, adminName, adminEmail, adminPassword, adminDepartment);
       addToast('Organization registered and Admin logged in!', 'success');
     } catch (err) {
       addToast(err.message || 'Registration failed', 'error');
@@ -149,6 +150,25 @@ export default function RegisterPage() {
                 placeholder="Min. 6 characters"
                 value={adminPassword}
                 onChange={(e) => setAdminPassword(e.target.value)}
+                style={{
+                  padding: '11px 14px',
+                  borderRadius: '10px',
+                  background: 'var(--bg-input)',
+                  border: '1px solid var(--border-primary)',
+                  color: 'var(--text-primary)',
+                  fontSize: '14px',
+                  outline: 'none'
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>Department Name</label>
+              <input
+                type="text"
+                placeholder="e.g. Engineering, Sales, Marketing"
+                value={adminDepartment}
+                onChange={(e) => setAdminDepartment(e.target.value)}
                 style={{
                   padding: '11px 14px',
                   borderRadius: '10px',

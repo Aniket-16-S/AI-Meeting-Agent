@@ -10,10 +10,10 @@ export default function UserManagementPage() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState('Member');
+  const [role, setRole] = useState('employee');
   const [departmentId, setDepartmentId] = useState('');
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!name || !email || !password || !role || !departmentId) {
       addToast('Please fill in all fields', 'warning');
@@ -25,13 +25,13 @@ export default function UserManagementPage() {
     }
 
     try {
-      createUser(name, email, password, role, departmentId);
+      await createUser(name, email, password, role, departmentId);
       addToast(`User "${name}" has been registered successfully!`, 'success');
       // Reset form
       setName('');
       setEmail('');
       setPassword('');
-      setRole('Member');
+      setRole('employee');
       setDepartmentId('');
     } catch (err) {
       addToast(err.message || 'Failed to create user', 'error');
@@ -86,10 +86,10 @@ export default function UserManagementPage() {
                         fontWeight: 700,
                         padding: '3px 8px',
                         borderRadius: '4px',
-                        background: u.role === 'OrgAdmin' ? 'var(--color-critical-bg)' : u.role === 'DeptManager' ? 'var(--color-high-bg)' : 'var(--color-low-bg)',
-                        color: u.role === 'OrgAdmin' ? 'var(--color-critical-text)' : u.role === 'DeptManager' ? 'var(--color-high-text)' : 'var(--color-low-text)',
+                        background: u.role === 'admin' ? 'var(--color-critical-bg)' : 'var(--color-low-bg)',
+                        color: u.role === 'admin' ? 'var(--color-critical-text)' : 'var(--color-low-text)',
                       }}>
-                        {u.role}
+                        {u.role === 'admin' ? 'Admin' : 'Employee'}
                       </span>
                     </td>
                     <td style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
@@ -180,9 +180,8 @@ export default function UserManagementPage() {
                   cursor: 'pointer'
                 }}
               >
-                <option value="Member">Member (Employee)</option>
-                <option value="DeptManager">DeptManager (Manager)</option>
-                <option value="OrgAdmin">OrgAdmin (Organization Admin)</option>
+                <option value="employee">Employee</option>
+                <option value="admin">Admin</option>
               </select>
             </div>
 

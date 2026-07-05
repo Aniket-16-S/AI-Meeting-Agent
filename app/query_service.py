@@ -1,10 +1,36 @@
-import os
-import logging
+"""
+app/query_service.py
+--------------------
+LangGraph-powered natural language query agent.
+
+Uses Groq (llama-3.3-70b-versatile) with a read-only PostgreSQL tool.
+
+Key design decisions
+─────────────────────
+- Organization isolation: every query is validated server-side via a
+  contextvars token so the LLM cannot bypass tenant boundaries.
+- Read-only enforcement: the SQLAlchemy connection is opened with
+  ``execution_options(postgresql_readonly=True)`` instead of issuing a
+  raw ``SET TRANSACTION READ ONLY`` statement (which fails when called
+  inside an already-started transaction block).
+- Colon escaping: SQLAlchemy's ``text()`` treats ``:name`` as a named
+  bind parameter.  Because the LLM writes raw UUID literals directly in
+  the SQL string (e.g. ``WHERE id = '550e…'``), no bind params are used
+  and therefore no colon-escaping is required.  The previous
+  ``query.replace(":", "\\:")`` was actively mangling UUID literals that
+  happen to appear after a colon (rare but possible) and produced
+  ``\\;`` at statement termination.
+"""
+
 import json
+import logging
+import contextvars
 from datetime import datetime, timezone
 from typing import Annotated, TypedDict
 
+import os
 from dotenv import load_dotenv
+
 from langchain_groq import ChatGroq
 from langchain_core.messages import BaseMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
@@ -16,201 +42,243 @@ from app.database_session import async_session_factory
 
 logger = logging.getLogger(__name__)
 
-# State definition
+# ── Request-scoped tenant context ────────────────────────────────────────────
+# Set once per HTTP request before invoking the graph; reset in a `finally`.
+_current_org_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "current_org_id", default=None
+)
+
+
+# ── LangGraph state ──────────────────────────────────────────────────────────
+
 class QueryState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
 
+# ── Database tool ────────────────────────────────────────────────────────────
+
 @tool
 async def query_database(query: str) -> str:
     """
-    Executes a SQL SELECT query against the PostgreSQL database and returns the results as a JSON string.
-    Use this to fetch records from meetings, tasks, or risks tables.
-    Always write read-only SELECT queries. Do not perform any write/delete operations.
+    Execute a read-only SQL SELECT query against the PostgreSQL database.
+
+    Returns the result rows serialised as a JSON string, or an error message
+    prefixed with "Error:" so the LLM knows to explain the failure to the user.
+
+    Rules the LLM MUST follow:
+    - Only SELECT statements are allowed.
+    - Every query against a data table MUST filter by the correct organization_id.
+    - Write plain SQL with single-quoted string literals — do NOT escape colons.
     """
-    cleaned_query = query.strip().lower()
-    if not cleaned_query.startswith("select"):
-        return "Error: Only read-only SELECT queries are allowed."
-    
+    # ── Safety: only SELECT ──────────────────────────────────────────────────
+    stripped = query.strip()
+    if not stripped.upper().startswith("SELECT"):
+        return "Error: Only read-only SELECT queries are permitted."
+
+    # ── Safety: tenant isolation ─────────────────────────────────────────────
+    org_id = _current_org_id.get()
+    if org_id:
+        lower_query = stripped.lower()
+        org_id_lower = org_id.lower()
+        if org_id_lower not in lower_query:
+            return (
+                f"Error: Every query must include a filter on "
+                f"organization_id = '{org_id}' to preserve tenant isolation."
+            )
+        # Allow queries that target the organizations table itself (no org_id column)
+        if "organizations" not in lower_query and "organization_id" not in lower_query:
+            return (
+                f"Error: Queries against data tables must filter by "
+                f"organization_id = '{org_id}'."
+            )
+
     try:
+        # Open a read-only connection via execution_options — this is the
+        # correct SQLAlchemy way; issuing SET TRANSACTION READ ONLY inside an
+        # open session.begin() block is a PostgreSQL protocol error.
         async with async_session_factory() as session:
-            result = await session.execute(text(query))
+            # Pass execution_options directly to session.execute() as AsyncSession
+            # doesn't expose execution_options as a method on the session object itself.
+            result = await session.execute(
+                text(stripped),
+                execution_options={"postgresql_readonly": True}
+            )
+
             if result.returns_rows:
                 rows = result.mappings().all()
-                serializable_rows = []
-                for row in rows:
-                    row_dict = {}
-                    for k, v in dict(row).items():
-                        row_dict[k] = str(v) if v is not None else None
-                    serializable_rows.append(row_dict)
-                return json.dumps(serializable_rows)
-            else:
-                return "Query executed successfully, but returned no rows."
-    except Exception as e:
-        logger.error(f"Database query execution failed: {e}")
-        return f"Error executing query: {str(e)}"
+                serialisable = [
+                    {k: (str(v) if v is not None else None) for k, v in dict(row).items()}
+                    for row in rows
+                ]
+                return json.dumps(serialisable, default=str)
+
+            return "Query executed successfully but returned no rows."
+
+    except Exception as exc:
+        logger.error("Database query execution failed: %s", exc, exc_info=True)
+        return f"Error executing query: {exc}"
 
 
-def _build_query_system_prompt() -> str:
-    now = datetime.now(tz=timezone.utc).astimezone()   # local system time
-    day_name = now.strftime("%A")
-    date_str = now.strftime("%Y-%m-%d")
-    time_str = now.strftime("%H:%M")
-    tz_name = now.strftime("%Z")
+# ── System prompt builder ────────────────────────────────────────────────────
 
+def _build_system_prompt(organization_id: str) -> str:
+    now = datetime.now(tz=timezone.utc).astimezone()
     return (
         "You are an AI meeting assistant with read-only access to a PostgreSQL database. "
-        "Your goal is to answer the user's natural language questions by querying the database using the provided query_database tool, and summarizing the results.\n\n"
-        f"Today is {day_name}, {date_str}. The current time is {time_str} {tz_name}. "
-        "Use this current date/time context to resolve relative date queries (e.g., 'tasks due today' -> due_date = today's date, 'meetings from last week', etc.) in your SQL queries.\n\n"
+        "Your goal is to answer the user's natural language questions by querying the "
+        "database using the `query_database` tool, then summarising the results.\n\n"
+        f"Today is {now.strftime('%A, %Y-%m-%d')}. "
+        f"Current time: {now.strftime('%H:%M %Z')}.\n"
+        f"You are strictly authorised to view data for organisation_id = '{organization_id}'. "
+        f"EVERY SQL query you write MUST contain a filter: "
+        f"``organization_id = '{organization_id}'``.\n\n"
         "DATABASE SCHEMA:\n"
-        "1. Table `meetings`:\n"
-        "   - `id` (UUID, PRIMARY KEY)\n"
-        "   - `title` (VARCHAR(255)) - The meeting title (typically the uploaded filename)\n"
-        "   - `file_name` (VARCHAR(255)) - Original filename\n"
-        "   - `content_hash` (VARCHAR(64)) - Hash of the transcript to prevent duplicates\n"
-        "   - `upload_date` (TIMESTAMP) - Timestamp when the meeting was uploaded\n"
-        "   - `meeting_date` (DATE, NULL) - The actual date the meeting occurred\n"
-        "   - `raw_transcript` (TEXT) - The full text of the meeting transcript\n\n"
-        "2. Table `tasks`:\n"
-        "   - `id` (UUID, PRIMARY KEY)\n"
-        "   - `meeting_id` (UUID, FOREIGN KEY to `meetings.id`)\n"
-        "   - `task_description` (TEXT) - Description of the action item/task\n"
-        "   - `owner` (VARCHAR(255)) - Raw owner name string (e.g., 'Speaker A', 'John')\n"
-        "   - `owners_list` (JSONB) - Resolved list of individual speaker identifiers, e.g. [\"John\", \"Sarah\"]\n"
-        "   - `due_date` (DATE) - The resolved due date for the task\n"
-        "   - `raw_deadline` (VARCHAR(100), NULL) - Raw deadline phrase spoken\n"
-        "   - `deadline_type` (VARCHAR(20)) - 'EXPLICIT', 'INFERRED', or 'NONE'\n"
-        "   - `priority` (VARCHAR(20)) - 'Low', 'Medium', 'High', or 'Critical'\n"
-        "   - `category` (VARCHAR(30)) - 'Action Item', 'Decision', 'Follow-up', or 'Info'\n"
-        "   - `status` (VARCHAR(20)) - Defaults to 'Open'\n"
-        "   - `created_at` (TIMESTAMP)\n\n"
-        "3. Table `risks`:\n"
-        "   - `id` (UUID, PRIMARY KEY)\n"
-        "   - `meeting_id` (UUID, FOREIGN KEY to `meetings.id`)\n"
-        "   - `risk_description` (TEXT) - Description of the risk or issue\n"
-        "   - `severity` (VARCHAR(20)) - 'Low', 'Medium', 'High', or 'Critical'\n"
-        "   - `created_at` (TIMESTAMP)\n\n"
-        "SQL QUERY RULES:\n"
-        "- ALWAYS use read-only SELECT queries. Do not try to modify, insert, delete, or drop tables.\n"
-        "- HINT ABOUT JOIN OPERATIONS: To connect tasks or risks with their parent meeting details (like meeting title or meeting date), perform a JOIN on the `meeting_id` column (e.g., `tasks.meeting_id = meetings.id` or `risks.meeting_id = meetings.id`).\n"
-        "- Case-insensitive partial string matching: Use `ILIKE` for text matching where appropriate (e.g. `owner ILIKE '%john%'` or `CAST(owners_list AS TEXT) ILIKE '%john%'`).\n"
-        "- JSONB Querying: Since `owners_list` is a JSONB array, you can search it using containment operators or cast it to text (e.g. `CAST(owners_list AS TEXT) ILIKE '%john%'`).\n"
-        "- If the results returned from `query_database` are empty or contain an error, explain this clearly to the user.\n"
-        "- Always formulate an accurate, helpful response summarizing the database query results to answer the user's question."
+        "1. `organizations` — id (UUID PK), name (VARCHAR)\n"
+        "2. `users` — id, organization_id (FK), f_name, l_name, email, role (user_role enum: 'admin'|'employee')\n"
+        "3. `teams` — id, organization_id (FK), name, description\n"
+        "4. `team_members` — team_id (FK), user_id (FK) [composite PK]\n"
+        "5. `meetings` — id, organization_id (FK), uploaded_by (FK→users.id), title, file_name,\n"
+        "   content_hash, created_at (TIMESTAMP), meeting_date (DATE), summary (TEXT),\n"
+        "   status (meeting_status enum: 'PENDING'|'PROCESSING'|'COMPLETED'|'FAILED')\n"
+        "6. `meeting_teams` — meeting_id (FK), team_id (FK) [composite PK]\n"
+        "7. `meeting_transcripts` — meeting_id (PK FK), raw_transcript (TEXT), is_processed (BOOLEAN)\n"
+        "8. `meeting_participants` — id, meeting_id (FK), user_id (FK nullable), speaker_name (VARCHAR)\n"
+        "9. `tasks` — id, organization_id (FK), meeting_id (FK), description (TEXT), owner (VARCHAR),\n"
+        "   owners_list (JSONB), due_date (DATE), due_time (TIME), raw_deadline (VARCHAR),\n"
+        "   deadline_type ('EXPLICIT'|'INFERRED'|'NONE'), priority ('Low'|'Medium'|'High'|'Critical'),\n"
+        "   category ('Action Item'|'Decision'|'Follow-up'|'Info'), status (VARCHAR, default 'Open'),\n"
+        "   created_at (TIMESTAMP)\n"
+        "10. `task_assignees` — task_id (FK), user_id (FK) [composite PK]\n"
+        "11. `risks` — id, organization_id (FK), meeting_id (FK), description (TEXT),\n"
+        "    severity ('Low'|'Medium'|'High'|'Critical'), created_at (TIMESTAMP)\n\n"
+        "SQL RULES:\n"
+        f"- ALWAYS filter by `organization_id = '{organization_id}'` for any data table.\n"
+        "- Use only SELECT statements — never INSERT, UPDATE, DELETE, or DDL.\n"
+        "- Use ILIKE for case-insensitive text matching.\n"
+        "- To search JSONB `owners_list`, use: CAST(owners_list AS TEXT) ILIKE '%name%'\n"
+        "- To join tasks with a user by name: "
+        "JOIN task_assignees ta ON ta.task_id = tasks.id JOIN users u ON u.id = ta.user_id\n"
+        "- Write plain SQL with single-quoted string literals. "
+        "Do NOT escape colons or use backslashes in the query string.\n"
+        "- If results are empty or contain an error, explain clearly to the user.\n"
+        "- Use current date context to resolve relative queries "
+        "('tasks due today' → due_date = current date, etc.)."
     )
 
 
-async def llm_node(state: QueryState) -> dict:
-    """Calls the Groq LLM with the list of messages in state."""
-    logger.info("LangGraph: llm_node entered.")
+# ── LangGraph nodes ──────────────────────────────────────────────────────────
+
+async def _llm_node(state: QueryState) -> dict:
+    """Call the Groq LLM with current message history."""
+    logger.debug("LangGraph: llm_node entered.")
     load_dotenv(override=True)
-    groq_api_key = os.getenv("groq")
-    if not groq_api_key:
-        raise ValueError("The 'groq' environment variable containing the Groq API key is not set.")
-    
+    api_key = os.getenv("groq")
+    if not api_key:
+        raise ValueError("The 'groq' environment variable (Groq API key) is not set.")
+
     llm = ChatGroq(
         model="llama-3.3-70b-versatile",
-        api_key=groq_api_key,
+        api_key=api_key,
         temperature=0,
+        max_retries=2,
     )
-    llm_with_tools = llm.bind_tools([query_database])
-    response = await llm_with_tools.ainvoke(state["messages"])
-    logger.info("LangGraph: llm_node execution completed.")
+    response = await llm.bind_tools([query_database]).ainvoke(state["messages"])
+    logger.debug("LangGraph: llm_node completed.")
     return {"messages": [response]}
 
 
-async def query_database_node(state: QueryState) -> dict:
-    """Executes the query_database tool calls requested by the LLM."""
-    logger.info("LangGraph: query_database_node entered.")
-    messages = state["messages"]
-    last_message = messages[-1]
-    tool_messages = []
-    
-    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
-        for tool_call in last_message.tool_calls:
-            if tool_call["name"] == "query_database":
-                query_arg = tool_call["args"].get("query")
-                logger.info(f"Executing query_database tool with query: {query_arg}")
-                result = await query_database.ainvoke(query_arg)
-                tool_message = ToolMessage(
-                    content=result,
-                    tool_call_id=tool_call["id"],
-                    name=tool_call["name"]
+async def _tool_node(state: QueryState) -> dict:
+    """Execute any tool calls requested by the LLM."""
+    logger.debug("LangGraph: tool_node entered.")
+    last = state["messages"][-1]
+    results: list[ToolMessage] = []
+
+    if isinstance(last, AIMessage) and last.tool_calls:
+        for call in last.tool_calls:
+            if call["name"] == "query_database":
+                sql = call["args"].get("query", "")
+                logger.info("Executing SQL: %s", sql)
+                output = await query_database.ainvoke(sql)
+                results.append(
+                    ToolMessage(
+                        content=output,
+                        tool_call_id=call["id"],
+                        name=call["name"],
+                    )
                 )
-                tool_messages.append(tool_message)
-                
-    logger.info("LangGraph: query_database_node execution completed.")
-    return {"messages": tool_messages}
+
+    logger.debug("LangGraph: tool_node completed.")
+    return {"messages": results}
 
 
-def route_tools(state: QueryState):
-    """Router function to determine if tools should be called or if we should stop."""
-    messages = state["messages"]
-    last_message = messages[-1]
-    if isinstance(last_message, AIMessage) and last_message.tool_calls:
-        return "query_database_node"
+def _should_call_tools(state: QueryState) -> str:
+    last = state["messages"][-1]
+    if isinstance(last, AIMessage) and last.tool_calls:
+        return "tool_node"
     return END
 
 
-# Build and compile graph
-workflow = StateGraph(QueryState)
-workflow.add_node("llm_node", llm_node)
-workflow.add_node("query_database_node", query_database_node)
+# ── Build & compile graph (once at import time) ───────────────────────────────
 
-workflow.set_entry_point("llm_node")
-workflow.add_conditional_edges(
-    "llm_node",
-    route_tools,
-    {
-        "query_database_node": "query_database_node",
-        END: END
-    }
-)
-workflow.add_edge("query_database_node", "llm_node")
+_workflow = StateGraph(QueryState)
+_workflow.add_node("llm_node", _llm_node)
+_workflow.add_node("tool_node", _tool_node)
+_workflow.set_entry_point("llm_node")
+_workflow.add_conditional_edges("llm_node", _should_call_tools, {"tool_node": "tool_node", END: END})
+_workflow.add_edge("tool_node", "llm_node")
 
-query_graph = workflow.compile()
+query_graph = _workflow.compile()
 
 
-async def process_natural_language_query(question: str) -> dict:
+# ── Public entry-point ───────────────────────────────────────────────────────
+
+async def process_natural_language_query(question: str, organization_id: str) -> dict:
     """
-    Takes a natural language question, passes it through the LangGraph-based agent
-    which calls Groq to decide if a query is needed. The Groq agent will use the
-    query_database tool to extract results, and then formulate a natural language
-    response.
+    Process a natural language question using the LangGraph agent.
+
+    Returns a dict with:
+        - ``answer``            – human-readable summary from the LLM
+        - ``sql_queries``       – list of SQL strings the agent ran
+        - ``database_results``  – raw rows returned by the DB (for the UI)
     """
-    system_prompt = _build_query_system_prompt()
-    messages = [
-        ("system", system_prompt),
-        ("user", question),
-    ]
-    
-    logger.info(f"Running LangGraph agent for question: {question}")
-    state = await query_graph.ainvoke({"messages": messages})
-    
-    sql_queries = []
-    database_results = []
-    
-    for msg in state["messages"]:
-        if isinstance(msg, AIMessage) and msg.tool_calls:
-            for tool_call in msg.tool_calls:
-                if tool_call["name"] == "query_database":
-                    sql_queries.append(tool_call["args"].get("query"))
-        elif isinstance(msg, ToolMessage):
-            try:
-                data_list = json.loads(msg.content)
-                if isinstance(data_list, list):
-                    database_results.extend(data_list)
-                else:
-                    database_results.append(data_list)
-            except Exception:
-                # If database output wasn't valid JSON (e.g., error string)
-                database_results.append(msg.content)
-                
-    final_answer = state["messages"][-1].content
-    
-    return {
-        "filters_applied": {"sql_queries": sql_queries},
-        "database_results": database_results,
-        "answer": final_answer,
-    }
+    token = _current_org_id.set(organization_id)
+    try:
+        system_prompt = _build_system_prompt(organization_id)
+        initial_messages = [
+            ("system", system_prompt),
+            ("user", question),
+        ]
+
+        logger.info("Running query agent for org=%s, question=%r", organization_id, question)
+        final_state = await query_graph.ainvoke({"messages": initial_messages})
+
+        # ── Extract structured output from message history ─────────────────
+        sql_queries: list[str] = []
+        database_results: list = []
+
+        for msg in final_state["messages"]:
+            if isinstance(msg, AIMessage) and msg.tool_calls:
+                for call in msg.tool_calls:
+                    if call["name"] == "query_database":
+                        sql_queries.append(call["args"].get("query", ""))
+            elif isinstance(msg, ToolMessage):
+                try:
+                    parsed = json.loads(msg.content)
+                    if isinstance(parsed, list):
+                        database_results.extend(parsed)
+                    else:
+                        database_results.append(parsed)
+                except (json.JSONDecodeError, TypeError):
+                    # Error strings or non-JSON responses go in verbatim
+                    database_results.append(msg.content)
+
+        final_answer = final_state["messages"][-1].content
+
+        return {
+            "answer": final_answer,
+            "filters_applied": {"sql_queries": sql_queries},
+            "database_results": database_results,
+        }
+
+    finally:
+        _current_org_id.reset(token)

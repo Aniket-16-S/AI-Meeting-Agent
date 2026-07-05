@@ -84,6 +84,7 @@ class RiskSchema(BaseModel):
 
 
 class MeetingExtractionResult(BaseModel):
+    meeting_title: str = Field(description="A concise, AI-generated title for the meeting.")
     meeting_summary: str = Field(description="A concise summary of the overall meeting.")
     speakers: List[str] = Field(
         default_factory=list,

@@ -1,102 +1,174 @@
 # Database Schema
 
-This document explains the PostgreSQL database schema used by the AI Meeting Agent.
+This document explains the multi-tenant PostgreSQL database schema used by the AI Meeting Agent.
 
-The schema is initialised automatically in `app/database_service.py` and consists of three main tables to persist meeting data, actionable tasks, and identified risks. The database tables are initialized with all required columns.
+The schema is initialized automatically in `app/database_service.py` on FastAPI application boot. All existing testing tables are dropped on start to ensure clean recreations of the normalized layout.
 
 ---
 
 ## Tables
 
-### 1. `meetings`
-Stores the core information about an uploaded meeting transcript.
+### 1. `organizations`
+Stores tenant organizations.
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | UUID PK | Auto-generated. |
-| `title` | VARCHAR(255) NOT NULL | Currently set to the uploaded filename. |
-| `file_name` | VARCHAR(255) NOT NULL | Original filename. |
-| `content_hash` | VARCHAR(64) UNIQUE NOT NULL | SHA-256 hash for duplicate-upload prevention. |
-| `upload_date` | TIMESTAMP | Server timestamp at time of upload. |
-| `meeting_date` | DATE NULL | The date the meeting *actually occurred* (extracted from the transcript or set manually). Useful for calendar integrations. |
-| `raw_transcript` | TEXT | Full parsed text of the uploaded file. |
+| `name` | VARCHAR(255) NOT NULL | Organization name. |
 
 ---
 
-### 2. `tasks`
-Stores the actionable tasks (Action Items, Decisions, etc.) extracted from the meeting transcript by the LLM.
+### 2. `users`
+Stores user records belonging to an organization.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID PK | Auto-generated. |
+| `organization_id` | UUID FK | References `organizations.id` with `ON DELETE CASCADE`. |
+| `f_name` | VARCHAR(100) | First name. |
+| `l_name` | VARCHAR(100) | Last name. |
+| `email` | VARCHAR(255) UNIQUE | Unique login email. |
+| `password_hash` | VARCHAR(255) NOT NULL | Cryptographic password hash. |
+| `role` | `user_role` ENUM | `admin` or `employee`. |
+
+---
+
+### 3. `teams`
+Stores teams/departments created within an organization.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID PK | Auto-generated. |
+| `organization_id` | UUID FK | References `organizations.id` with `ON DELETE CASCADE`. |
+| `name` | VARCHAR(255) NOT NULL | Team name. |
+| `description` | TEXT | Description. |
+
+---
+
+### 4. `team_members`
+A join table linking users to teams/departments they belong to.
+
+| Column | Type | Notes |
+|---|---|---|
+| `team_id` | UUID FK | References `teams.id` with `ON DELETE CASCADE`. |
+| `user_id` | UUID FK | References `users.id` with `ON DELETE CASCADE`. |
+
+- **Primary Key**: Composite PK `(team_id, user_id)`
+
+---
+
+### 5. `meetings`
+Stores meeting metadata. The raw transcript text has been separated to optimize metadata querying.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID PK | Auto-generated. |
+| `organization_id` | UUID FK | References `organizations.id` with `ON DELETE CASCADE`. |
+| `uploaded_by` | UUID FK | References `users.id` with `ON DELETE RESTRICT`. |
+| `title` | VARCHAR(255) NOT NULL | Meeting title. |
+| `meeting_date` | DATE | Date the meeting actually occurred. |
+| `file_name` | VARCHAR(255) NOT NULL | Original uploaded filename. |
+| `content_hash` | VARCHAR(64) UNIQUE | SHA-256 hash for idempotency prevention. |
+| `summary` | TEXT | AI-generated summary of the meeting. |
+| `status` | `meeting_status` ENUM | `PENDING`, `PROCESSING`, `COMPLETED`, `FAILED`. |
+| `created_at` | TIMESTAMP | Upload timestamp. |
+
+---
+
+### 6. `meeting_teams`
+A join table linking meetings to teams. Enables cross-team idempotency without duplicating the meeting record.
+
+| Column | Type | Notes |
+|---|---|---|
+| `meeting_id` | UUID FK | References `meetings.id` with `ON DELETE CASCADE`. |
+| `team_id` | UUID FK | References `teams.id` with `ON DELETE CASCADE`. |
+
+- **Primary Key**: Composite PK `(meeting_id, team_id)`
+
+---
+
+### 7. `meeting_transcripts`
+Stores the raw transcript text of a meeting.
+
+| Column | Type | Notes |
+|---|---|---|
+| `meeting_id` | UUID PK, FK | References `meetings.id` with `ON DELETE CASCADE`. |
+| `raw_transcript` | TEXT NOT NULL | The full transcript content. |
+| `is_processed` | BOOLEAN | Defaults to `FALSE`. Turned `TRUE` once LLM extraction finishes. |
+
+---
+
+### 8. `meeting_participants`
+Stores speakers identified in the meeting transcript.
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | UUID PK | Auto-generated. |
 | `meeting_id` | UUID FK | References `meetings.id` with `ON DELETE CASCADE`. |
-| `task_description` | TEXT NOT NULL | Full description of the task or action item. |
-| `owner` | VARCHAR(255) | **Raw LLM string** – e.g. `"Speaker A"`, `"All attendees"`, `"Presenters (Speaker A, Speaker B)"`. Kept for display/audit purposes. |
-| `owners_list` | JSONB | **Resolved list of individual speaker identifiers** derived from `owner`. Examples: `["Speaker A"]`, `["Speaker A", "Speaker B"]`, `["Speaker A", "Speaker B", "Speaker C"]` (when "All attendees"). Used for programmatic lookup (email/calendar features). |
-| `due_date` | DATE | Resolved ISO 8601 date. Defaults to **today's date** if the LLM cannot determine a specific deadline. Subject to cross-day rollover: if the inferred `due_time` is earlier than the current time and the due date would be today, it is automatically pushed to tomorrow. |
-| `due_time` | TIME | Resolved time-of-day (HH:MM). Inferred from natural-language phrases (e.g., `'before lunch'` → `12:00`, `'EOD'` → `17:00`). Defaults to **17:00** (end of day) when no time-of-day context is present. |
-| `raw_deadline` | VARCHAR(100) NULL | The exact deadline phrase spoken, e.g. `"next Friday"`, `"after lunch"`. |
-| `deadline_type` | VARCHAR(20) | `EXPLICIT` – a concrete date/time was stated. `INFERRED` – a relative/vague timeframe was mentioned. `NONE` – no deadline mentioned. |
-| `priority` | VARCHAR(20) | `Low`, `Medium`, `High`, or `Critical`. |
-| `category` | VARCHAR(30) | `Action Item`, `Decision`, `Follow-up`, or `Info`. |
-| `status` | VARCHAR(20) | Defaults to `Open`. |
-| `created_at` | TIMESTAMP | Server timestamp of row creation. |
+| `user_id` | UUID FK | References `users.id` with `ON DELETE SET NULL`. Optional mapping. |
+| `speaker_name` | VARCHAR(255) NOT NULL | Speaker label/name parsed from transcript. |
 
 ---
 
-### 3. `risks`
-Stores potential risks or issues discussed during the meeting.
+### 9. `tasks`
+Stores actionable tasks or decisions extracted by the LLM.
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | UUID PK | Auto-generated. |
+| `organization_id` | UUID FK | References `organizations.id` with `ON DELETE CASCADE`. |
 | `meeting_id` | UUID FK | References `meetings.id` with `ON DELETE CASCADE`. |
-| `risk_description` | TEXT NOT NULL | Detailed explanation of the identified risk. |
-| `severity` | VARCHAR(20) | `Low`, `Medium`, `High`, or `Critical`. |
-| `created_at` | TIMESTAMP | Server timestamp of row creation. |
+| `description` | TEXT NOT NULL | Description of the task/action item. (Named `description` instead of `task_description` in the normalized schema). |
+| `due_date` | DATE | Resolved due date. |
+| `due_time` | TIME | Resolved due time. |
+| `raw_deadline` | VARCHAR(100) | Natural language deadline phrase. |
+| `deadline_type` | VARCHAR(20) | `EXPLICIT`, `INFERRED`, `NONE`. |
+| `priority` | VARCHAR(20) | `Low`, `Medium`, `High`, `Critical`. |
+| `category` | VARCHAR(30) | `Action Item`, `Decision`, `Follow-up`, `Info`. |
+| `status` | VARCHAR(20) | Defaults to `'Open'`. |
+| `owner` | VARCHAR(255) | Raw LLM owner name string. |
+| `owners_list` | JSONB | Resolved speaker names array. |
+| `created_at` | TIMESTAMP | Creation timestamp. |
 
 ---
 
-## Owner Resolution Logic
+### 10. `task_assignees`
+A join table mapping tasks to users.
 
-The LLM returns owner strings exactly as referenced in the meeting. The backend (`app/utils/owner_parser.py`) then resolves these into the `owners_list` JSONB array:
-
-| LLM `owner` string | Resolved `owners_list` |
-|---|---|
-| `"Unassigned"` | `[]` |
-| `"Speaker A"` | `["Speaker A"]` |
-| `"John"` | `["John"]` |
-| `"Speaker A, Speaker B"` | `["Speaker A", "Speaker B"]` |
-| `"Presenters (Speaker A, Speaker B)"` | `["Speaker A", "Speaker B"]` |
-| `"All attendees"` | All speakers identified in the meeting |
-| `"Everyone"` | All speakers identified in the meeting |
-
-This design keeps the raw owner string intact for display while providing a clean list for future email/calendar automation.
-
----
-
-## Semantic Querying
-
-Instead of relying on unstable LLM-to-SQL agents, the AI Meeting Agent safely queries this schema by asking the LLM to output a strictly defined Pydantic JSON schema (`SearchFilters`).
-
-**SearchFilters Schema:**
-
-| Field | Type | Description |
+| Column | Type | Notes |
 |---|---|---|
-| `target_table` | `"tasks"` \| `"risks"` \| `"meetings"` | The primary entity to query. |
-| `meeting_id` | Optional string | Filter results to a specific meeting UUID. |
-| `owner_name` | Optional string | Partial-match filter against both `owner` and `owners_list`. |
-| `priority` | Optional string | Filter by priority (tasks) or severity (risks). |
-| `status` | Optional string | Filter by task status. |
-| `is_open_only` | Boolean | If true, only returns tasks with `status = 'Open'`. |
+| `task_id` | UUID FK | References `tasks.id` with `ON DELETE CASCADE`. |
+| `user_id` | UUID FK | References `users.id` with `ON DELETE CASCADE`. |
 
-The backend maps this JSON directly to parameterised SQL — no dynamic SQL injection risk.
+- **Primary Key**: Composite PK `(task_id, user_id)`
 
 ---
 
-## Future-Ready Columns
+### 11. `risks`
+Stores potential risks discussed during the meeting.
 
-The following columns are planned for future phases but **not yet in the schema**:
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID PK | Auto-generated. |
+| `organization_id` | UUID FK | References `organizations.id` with `ON DELETE CASCADE`. |
+| `meeting_id` | UUID FK | References `meetings.id` with `ON DELETE CASCADE`. |
+| `description` | TEXT NOT NULL | Detailed explanation of the risk. |
+| `severity` | VARCHAR(20) | `Low`, `Medium`, `High`, `Critical`. |
+| `created_at` | TIMESTAMP | Creation timestamp. |
 
-- `tasks.owner_email` — email address for the assigned owner (needed for automated email notifications).
-- `meetings.calendar_event_id` — external calendar event ID (needed for Google Calendar / Outlook integration).
+---
+
+## Indexing Structure
+High-speed lookup index optimizations are created as B-Tree structures:
+- `idx_users_org_id` on `users(organization_id)`
+- `idx_teams_org_id` on `teams(organization_id)`
+- `idx_meetings_org_id` on `meetings(organization_id)`
+- `idx_tasks_org_id` on `tasks(organization_id)`
+- `idx_risks_org_id` on `risks(organization_id)`
+- `idx_team_members_team_id` on `team_members(team_id)`
+- `idx_meeting_teams_team_id` on `meeting_teams(team_id)`
+- `idx_meeting_teams_meeting_id` on `meeting_teams(meeting_id)`
+- `idx_meeting_participants_meeting_id` on `meeting_participants(meeting_id)`
+- `idx_tasks_meeting_id` on `tasks(meeting_id)`
+- `idx_risks_meeting_id` on `risks(meeting_id)`
+- `idx_meetings_content_hash` on `meetings(content_hash)`

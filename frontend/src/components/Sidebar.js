@@ -29,7 +29,7 @@ export default function Sidebar({ isOpen, onToggle, onUpload }) {
     return pathname.startsWith(item.match || item.href);
   };
 
-  const userIsManager = user?.role === 'OrgAdmin' || user?.role === 'DeptManager';
+  const userIsManager = user?.role === 'admin';
 
   // Build navigation items dynamically based on user role
   const navItems = [

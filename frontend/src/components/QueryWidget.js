@@ -1,6 +1,7 @@
 'use client';
 import { useState, useRef, useEffect } from 'react';
 import { queryAgent } from '@/lib/api';
+import { useAuth } from '@/lib/AuthContext';
 
 const SUGGESTIONS = [
   'Show all high priority tasks',
@@ -16,6 +17,7 @@ export default function QueryWidget() {
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+  const { organization } = useAuth();
 
   useEffect(() => {
     if (open && inputRef.current) inputRef.current.focus();
@@ -33,7 +35,7 @@ export default function QueryWidget() {
     setLoading(true);
 
     try {
-      const data = await queryAgent(question);
+      const data = await queryAgent(question, organization?.id);
       setMessages((prev) => [
         ...prev,
         {

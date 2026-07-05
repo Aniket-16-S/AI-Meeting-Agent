@@ -41,12 +41,18 @@ function formatDate(d) {
 }
 
 export default function DashboardPage() {
-  const { user, department, organization, getDepartmentMeetingIds, users } = useAuth();
+  const { user, department, organization, deptMeetingIds, users } = useAuth();
   const { addToast } = useToast();
   const [meetings, setMeetings] = useState(null);
   const [tasks, setTasks] = useState(null);
   const [risks, setRisks] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  // Client-side mount state to avoid hydration issues with Recharts
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Sorting for Member Tasks
   const [sortAsc, setSortAsc] = useState(true);
@@ -73,7 +79,13 @@ export default function DashboardPage() {
   };
 
   useEffect(() => {
-    Promise.all([fetchMeetings(), fetchTasks(), fetchRisks()])
+    if (!organization?.id) return;
+    setLoading(true);
+    Promise.all([
+      fetchMeetings(organization.id),
+      fetchTasks(null, organization.id),
+      fetchRisks(null, organization.id),
+    ])
       .then(([m, t, r]) => {
         setMeetings(m);
         setTasks(t);
@@ -81,20 +93,19 @@ export default function DashboardPage() {
       })
       .catch(() => { })
       .finally(() => setLoading(false));
-  }, []);
+  }, [organization?.id]);
 
   // Filter backend data by user's active department meetings
   const { deptMeetings, deptTasks, deptRis } = useMemo(() => {
     if (!meetings || !tasks || !risks || !department) {
       return { deptMeetings: [], deptTasks: [], deptRis: [] };
     }
-    const deptMtgIds = getDepartmentMeetingIds(department.id);
-    const mFiltered = meetings.filter((m) => deptMtgIds.includes(m.id));
-    const tFiltered = tasks.filter((t) => deptMtgIds.includes(t.meeting_id));
-    const rFiltered = risks.filter((r) => deptMtgIds.includes(r.meeting_id));
+    const mFiltered = meetings.filter((m) => deptMeetingIds.includes(m.id));
+    const tFiltered = tasks.filter((t) => deptMeetingIds.includes(t.meeting_id));
+    const rFiltered = risks.filter((r) => deptMeetingIds.includes(r.meeting_id));
 
     return { deptMeetings: mFiltered, deptTasks: tFiltered, deptRis: rFiltered };
-  }, [meetings, tasks, risks, department, getDepartmentMeetingIds]);
+  }, [meetings, tasks, risks, department, deptMeetingIds]);
 
   // Member-Specific calculations
   const myTasks = useMemo(() => {
@@ -230,7 +241,7 @@ export default function DashboardPage() {
     );
   }
 
-  const userIsManager = user?.role === 'OrgAdmin' || user?.role === 'DeptManager';
+  const userIsManager = user?.role === 'admin';
 
   return (
     <div className="page-animate">
@@ -254,14 +265,14 @@ export default function DashboardPage() {
         }}>
           <span style={{ color: 'var(--text-secondary)' }}>Logged in as:</span>
           <span style={{
-            color: user?.role === 'OrgAdmin' ? 'var(--color-critical-text)' : user?.role === 'DeptManager' ? 'var(--color-high-text)' : 'var(--color-low-text)',
-            background: user?.role === 'OrgAdmin' ? 'var(--color-critical-bg)' : user?.role === 'DeptManager' ? 'var(--color-high-bg)' : 'var(--color-low-bg)',
+            color: user?.role === 'admin' ? 'var(--color-critical-text)' : 'var(--color-low-text)',
+            background: user?.role === 'admin' ? 'var(--color-critical-bg)' : 'var(--color-low-bg)',
             padding: '2px 8px',
             borderRadius: '4px',
             fontSize: '11px',
             fontWeight: 700
           }}>
-            {user?.role}
+            {user?.role === 'admin' ? 'Admin' : 'Employee'}
           </span>
         </div>
       </div>
@@ -371,7 +382,26 @@ export default function DashboardPage() {
                               ✓ Mark Complete
                             </button>
                           ) : (
-                            <span className="text-completed">✓ Completed</span>
+                            <button
+                              onClick={() => handleToggleComplete(t.id, t.status)}
+                              title="Click to reopen task"
+                              style={{
+                                background: 'rgba(34, 197, 94, 0.1)',
+                                color: '#22c55e',
+                                border: '1px solid rgba(34, 197, 94, 0.2)',
+                                cursor: 'pointer',
+                                padding: '6px 12px',
+                                borderRadius: '6px',
+                                fontSize: '12px',
+                                fontWeight: 500,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                transition: 'all 0.2s ease'
+                              }}
+                            >
+                              ✓ Completed
+                            </button>
                           )}
                         </td>
                       </tr>
@@ -478,30 +508,32 @@ export default function DashboardPage() {
                 </span>
               </div>
               <div style={{ flex: 1, minHeight: 0 }}>
-                {pieData.length === 0 ? (
-                  <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-tertiary)', fontSize: 13 }}>
-                    No risk items detected in department.
-                  </div>
-                ) : (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={pieData}
-                        cx="50%"
-                        cy="45%"
-                        innerRadius={60}
-                        outerRadius={90}
-                        paddingAngle={5}
-                        dataKey="value"
-                      >
-                        {pieData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                      </Pie>
-                      <Tooltip formatter={(value) => [`${value} Risks`, 'Count']} />
-                      <Legend verticalAlign="bottom" height={36} />
-                    </PieChart>
-                  </ResponsiveContainer>
+                {mounted && (
+                  pieData.length === 0 ? (
+                    <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-tertiary)', fontSize: 13 }}>
+                      No risk items detected in department.
+                    </div>
+                  ) : (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={pieData}
+                          cx="50%"
+                          cy="45%"
+                          innerRadius={60}
+                          outerRadius={90}
+                          paddingAngle={5}
+                          dataKey="value"
+                        >
+                          {pieData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.color} />
+                          ))}
+                        </Pie>
+                        <Tooltip formatter={(value) => [`${value} Risks`, 'Count']} />
+                        <Legend verticalAlign="bottom" height={36} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  )
                 )}
               </div>
             </div>
@@ -518,22 +550,24 @@ export default function DashboardPage() {
                 </span>
               </div>
               <div style={{ flex: 1, minHeight: 0 }}>
-                {deptTasks.length === 0 ? (
-                  <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-tertiary)', fontSize: 13 }}>
-                    No tasks available to track burn-down.
-                  </div>
-                ) : (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={lineData} margin={{ right: 10, left: -15 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
-                      <XAxis dataKey="dateStr" stroke="var(--text-tertiary)" fontSize={11} tickCount={6} />
-                      <YAxis stroke="var(--text-tertiary)" fontSize={11} allowDecimals={false} axisLine={false} tickLine={false} />
-                      <Tooltip formatter={(value, name) => [`${value} Tasks`, name]} />
-                      <Legend />
-                      <Line type="monotone" dataKey="Created" stroke="hsl(250, 80%, 60%)" strokeWidth={2.5} dot={false} activeDot={{ r: 6 }} />
-                      <Line type="monotone" dataKey="Completed" stroke="#22c55e" strokeWidth={2.5} dot={false} />
-                    </LineChart>
-                  </ResponsiveContainer>
+                {mounted && (
+                  deptTasks.length === 0 ? (
+                    <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-tertiary)', fontSize: 13 }}>
+                      No tasks available to track burn-down.
+                    </div>
+                  ) : (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={lineData} margin={{ right: 10, left: -15 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
+                        <XAxis dataKey="dateStr" stroke="var(--text-tertiary)" fontSize={11} tickCount={6} />
+                        <YAxis stroke="var(--text-tertiary)" fontSize={11} allowDecimals={false} axisLine={false} tickLine={false} />
+                        <Tooltip formatter={(value, name) => [`${value} Tasks`, name]} />
+                        <Legend />
+                        <Line type="monotone" dataKey="Created" stroke="hsl(250, 80%, 60%)" strokeWidth={2.5} dot={false} activeDot={{ r: 6 }} />
+                        <Line type="monotone" dataKey="Completed" stroke="#22c55e" strokeWidth={2.5} dot={false} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  )
                 )}
               </div>
             </div>
@@ -626,7 +660,26 @@ export default function DashboardPage() {
                               ✓ Mark Complete
                             </button>
                           ) : (
-                            <span className="text-completed">✓ Completed</span>
+                            <button
+                              onClick={() => handleToggleComplete(t.id, t.status)}
+                              title="Click to reopen task"
+                              style={{
+                                background: 'rgba(34, 197, 94, 0.1)',
+                                color: '#22c55e',
+                                border: '1px solid rgba(34, 197, 94, 0.2)',
+                                cursor: 'pointer',
+                                padding: '6px 12px',
+                                borderRadius: '6px',
+                                fontSize: '12px',
+                                fontWeight: 500,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                transition: 'all 0.2s ease'
+                              }}
+                            >
+                              ✓ Completed
+                            </button>
                           )}
                         </td>
                       </tr>

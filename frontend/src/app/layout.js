@@ -5,16 +5,19 @@ import { usePathname, useRouter } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
 import UploadModal from '@/components/UploadModal';
 import QueryWidget from '@/components/QueryWidget';
-import { ToastProvider } from '@/components/Toast';
+import { ToastProvider, useToast } from '@/components/Toast';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
+import { fetchMeetingStatus } from '@/lib/api';
 
 function LayoutWrapper({ children }) {
-  const { user, loading } = useAuth();
+  const { user, loading, organization } = useAuth();
+  const { addToast } = useToast();
   const pathname = usePathname();
   const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [processingMeetings, setProcessingMeetings] = useState([]);
 
   const toggleSidebar = () => setSidebarOpen((p) => !p);
 
@@ -26,11 +29,51 @@ function LayoutWrapper({ children }) {
         router.replace('/login');
       } else if (user && isAuthPage) {
         router.replace('/');
-      } else if (user && user.role === 'Member' && pathname.startsWith('/settings')) {
+      } else if (user && user.role === 'employee' && pathname.startsWith('/settings')) {
         router.replace('/');
       }
     }
   }, [user, loading, pathname, isAuthPage, router]);
+
+  const handleUploadQueued = (meetingId, filename) => {
+    setProcessingMeetings((prev) => [
+      ...prev,
+      { id: meetingId, filename, status: 'PROCESSING' }
+    ]);
+  };
+
+  // Poll for background transcription jobs
+  useEffect(() => {
+    const activeProcessing = processingMeetings.filter((m) => m.status === 'PROCESSING');
+    if (!activeProcessing.length || !organization?.id) {
+      return;
+    }
+
+    const interval = setInterval(async () => {
+      for (const meeting of activeProcessing) {
+        try {
+          const status = await fetchMeetingStatus(meeting.id, organization.id);
+          if (status === 'COMPLETED' || status === 'FAILED') {
+            setProcessingMeetings((prev) =>
+              prev.map((m) => (m.id === meeting.id ? { ...m, status } : m))
+            );
+            // Reload page content automatically
+            setRefreshKey((k) => k + 1);
+            
+            if (status === 'COMPLETED') {
+              addToast(`"${meeting.filename}" processed successfully! 🎉`, 'success');
+            } else {
+              addToast(`Failed to process "${meeting.filename}". ❌`, 'error');
+            }
+          }
+        } catch (e) {
+          console.error("Error polling meeting status", e);
+        }
+      }
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [processingMeetings, organization, addToast]);
 
   if (loading) {
     return (
@@ -58,6 +101,8 @@ function LayoutWrapper({ children }) {
     return <main style={{ minHeight: '100vh' }}>{children}</main>;
   }
 
+  const activeProcessingCount = processingMeetings.filter((m) => m.status === 'PROCESSING').length;
+
   return (
     <div className="app-layout">
       <Sidebar
@@ -82,10 +127,31 @@ function LayoutWrapper({ children }) {
         {children}
       </main>
 
+      {/* Floating Processing Panel */}
+      {activeProcessingCount > 0 && (
+        <div className="processing-floating-panel">
+          <div className="processing-panel-header">
+            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#ff4d4f', marginRight: 8 }} />
+            <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>AI Processing ({activeProcessingCount})</span>
+          </div>
+          <div className="processing-panel-body">
+            {processingMeetings.filter((m) => m.status === 'PROCESSING').map((m) => (
+              <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, padding: '4px 0' }}>
+                <span className="spinning-loader" />
+                <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: 200, color: 'var(--text-secondary)' }} title={m.filename}>
+                  {m.filename}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {uploadOpen && (
         <UploadModal
           onClose={() => setUploadOpen(false)}
           onSuccess={() => setRefreshKey((k) => k + 1)}
+          onUploadQueued={handleUploadQueued}
         />
       )}
 
@@ -96,7 +162,7 @@ function LayoutWrapper({ children }) {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
         <title>ActionCenter AI, Project Command Center</title>
         <meta name="description" content="AI-powered meeting transcript analyzer. Extract tasks, risks, and insights automatically." />

@@ -150,7 +150,7 @@ function TranscriptTab({ transcript }) {
 export default function MeetingDetailPage() {
   const params = useParams();
   const meetingId = params.id;
-  const { department, isMeetingInDepartment } = useAuth();
+  const { department, isMeetingInDepartment, organization } = useAuth();
   const { addToast } = useToast();
 
   const [meeting, setMeeting] = useState(null);
@@ -177,10 +177,12 @@ export default function MeetingDetailPage() {
   };
 
   useEffect(() => {
+    if (!meetingId || !organization?.id) return;
+    setLoading(true);
     Promise.all([
-      fetchMeeting(meetingId),
-      fetchTasks(meetingId),
-      fetchRisks(meetingId),
+      fetchMeeting(meetingId, organization.id),
+      fetchTasks(meetingId, organization.id),
+      fetchRisks(meetingId, organization.id),
     ])
       .then(([m, t, r]) => {
         setMeeting(m);
@@ -189,7 +191,7 @@ export default function MeetingDetailPage() {
       })
       .catch(() => { })
       .finally(() => setLoading(false));
-  }, [meetingId]);
+  }, [meetingId, organization?.id]);
 
   const hasAccess = isMeetingInDepartment(meetingId, department?.id);
 

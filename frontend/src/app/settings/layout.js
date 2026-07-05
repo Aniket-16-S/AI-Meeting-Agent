@@ -10,16 +10,16 @@ export default function SettingsLayout({ children }) {
   const router = useRouter();
 
   useEffect(() => {
-    if (user && user.role === 'Member') {
+    if (user && user.role === 'employee') {
       router.replace('/');
     }
   }, [user, router]);
 
-  if (!user || user.role === 'Member') {
+  if (!user || user.role === 'employee') {
     return null;
   }
 
-  const isOrgAdmin = user.role === 'OrgAdmin';
+  const isOrgAdmin = user.role === 'admin';
 
   const menuItems = [
     {

@@ -9,7 +9,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (user) {
-      if (user.role === 'Member') {
+      if (user.role === 'employee') {
         router.replace('/');
       } else {
         router.replace('/settings/users');

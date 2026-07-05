@@ -11,7 +11,7 @@ export default function LoginPage() {
   const { login } = useAuth();
   const { addToast } = useToast();
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!email || !password) {
       addToast('Please fill in all fields', 'warning');
@@ -19,23 +19,12 @@ export default function LoginPage() {
     }
     setSubmitting(true);
     try {
-      login(email, password);
+      await login(email, password);
       addToast('Welcome back!', 'success');
     } catch (err) {
       addToast(err.message || 'Login failed', 'error');
     } finally {
       setSubmitting(false);
-    }
-  };
-
-  const handleQuickLogin = (emailVal, passVal, roleLabel) => {
-    setEmail(emailVal);
-    setPassword(passVal);
-    try {
-      login(emailVal, passVal);
-      addToast(`Logged in as ${roleLabel}!`, 'success');
-    } catch (err) {
-      addToast(err.message, 'error');
     }
   };
 
@@ -155,75 +144,6 @@ export default function LoginPage() {
             <Link href="/register" style={{ color: 'var(--text-accent)', fontWeight: 600 }}>
               Register Organization
             </Link>
-          </div>
-        </div>
-
-        {/* Credentials Helper Cards */}
-        <div style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '10px',
-          background: 'rgba(255, 255, 255, 0.4)',
-          border: '1px solid var(--border-primary)',
-          borderRadius: '12px',
-          padding: '16px'
-        }}>
-          <div style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-secondary)', tracking: '0.05em' }}>
-            💡 Quick Demo Access
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '4px' }}>
-            <button
-              onClick={() => handleQuickLogin('admin@acme.com', 'password', 'Org Admin')}
-              style={{
-                background: 'var(--bg-secondary)',
-                border: '1px solid var(--border-primary)',
-                borderRadius: '8px',
-                padding: '8px 10px',
-                fontSize: '11px',
-                textAlign: 'left',
-                color: 'var(--text-primary)',
-                cursor: 'pointer',
-                boxShadow: 'var(--shadow-card)'
-              }}
-            >
-              <div style={{ fontWeight: 600, color: 'var(--color-critical-text)' }}>OrgAdmin</div>
-              <div style={{ fontSize: '10px', color: 'var(--text-tertiary)' }}>Sundar Pichai</div>
-            </button>
-            <button
-              onClick={() => handleQuickLogin('manager@acme.com', 'password', 'Dept Manager')}
-              style={{
-                background: 'var(--bg-secondary)',
-                border: '1px solid var(--border-primary)',
-                borderRadius: '8px',
-                padding: '8px 10px',
-                fontSize: '11px',
-                textAlign: 'left',
-                color: 'var(--text-primary)',
-                cursor: 'pointer',
-                boxShadow: 'var(--shadow-card)'
-              }}
-            >
-              <div style={{ fontWeight: 600, color: 'var(--color-high-text)' }}>DeptManager</div>
-              <div style={{ fontSize: '10px', color: 'var(--text-tertiary)' }}>Steve Jobs</div>
-            </button>
-            <button
-              onClick={() => handleQuickLogin('member@acme.com', 'password', 'Member')}
-              style={{
-                background: 'var(--bg-secondary)',
-                border: '1px solid var(--border-primary)',
-                borderRadius: '8px',
-                padding: '8px 10px',
-                fontSize: '11px',
-                textAlign: 'left',
-                color: 'var(--text-primary)',
-                cursor: 'pointer',
-                gridColumn: 'span 2',
-                boxShadow: 'var(--shadow-card)'
-              }}
-            >
-              <div style={{ fontWeight: 600, color: 'var(--color-low-text)' }}>Member Employee</div>
-              <div style={{ fontSize: '10px', color: 'var(--text-tertiary)' }}>Member User (admin@acme.com / password)</div>
-            </button>
           </div>
         </div>
 

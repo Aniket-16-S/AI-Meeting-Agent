@@ -1,64 +1,8 @@
 'use client';
 import { createContext, useContext, useState, useEffect } from 'react';
-import { useRouter, usePathname } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 
 const AuthContext = createContext(null);
-
-const DEFAULT_ORG = { id: 'acme-org-id', name: 'Acme Corporation' };
-
-const DEFAULT_DEPTS = [
-  { id: 'dept-eng', name: 'Engineering', organizationId: 'acme-org-id' },
-  { id: 'dept-mktg', name: 'Marketing', organizationId: 'acme-org-id' },
-  { id: 'dept-prod', name: 'Product Management', organizationId: 'acme-org-id' },
-];
-
-const DEFAULT_USERS = [
-  {
-    id: 'user-admin',
-    name: 'Sundar Pichai',
-    email: 'admin@acme.com',
-    password: 'password',
-    role: 'OrgAdmin',
-    departmentId: 'dept-eng',
-    organizationId: 'acme-org-id',
-  },
-  {
-    id: 'user-manager',
-    name: 'Steve Jobs',
-    email: 'manager@acme.com',
-    password: 'password',
-    role: 'DeptManager',
-    departmentId: 'dept-eng',
-    organizationId: 'acme-org-id',
-  },
-  {
-    id: 'user-member',
-    name: 'Member User',
-    email: 'member@acme.com',
-    password: 'password',
-    role: 'Member',
-    departmentId: 'dept-eng',
-    organizationId: 'acme-org-id',
-  },
-  {
-    id: 'user-alice',
-    name: 'Alice Smith',
-    email: 'alice@acme.com',
-    password: 'password',
-    role: 'Member',
-    departmentId: 'dept-eng',
-    organizationId: 'acme-org-id',
-  },
-  {
-    id: 'user-bob',
-    name: 'Bob Johnson',
-    email: 'bob@acme.com',
-    password: 'password',
-    role: 'Member',
-    departmentId: 'dept-mktg',
-    organizationId: 'acme-org-id',
-  },
-];
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -66,219 +10,224 @@ export function AuthProvider({ children }) {
   const [department, setDepartment] = useState(null);
   const [users, setUsers] = useState([]);
   const [departments, setDepartments] = useState([]);
+  const [deptMeetingIds, setDeptMeetingIds] = useState([]);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
-  const pathname = usePathname();
 
-  // Load database from localStorage or seed defaults
+  // Load active session from sessionStorage on mount
   useEffect(() => {
     try {
-      let storedOrgs = localStorage.getItem('saas_orgs');
-      let storedDepts = localStorage.getItem('saas_depts');
-      let storedUsers = localStorage.getItem('saas_users');
-      let storedCurrentUser = localStorage.getItem('saas_current_user');
-
-      if (!storedOrgs || !storedDepts || !storedUsers) {
-        // Seed initial data
-        localStorage.setItem('saas_orgs', JSON.stringify([DEFAULT_ORG]));
-        localStorage.setItem('saas_depts', JSON.stringify(DEFAULT_DEPTS));
-        localStorage.setItem('saas_users', JSON.stringify(DEFAULT_USERS));
-        storedOrgs = JSON.stringify([DEFAULT_ORG]);
-        storedDepts = JSON.stringify(DEFAULT_DEPTS);
-        storedUsers = JSON.stringify(DEFAULT_USERS);
-
-        // Pre-associate existing database meetings with default department
-        fetch('/api/meetings')
-          .then((r) => r.json())
-          .then((data) => {
-            if (data?.meetings) {
-              const meetingIds = data.meetings.map((m) => m.id);
-              const mapping = { 'dept-eng': meetingIds };
-              localStorage.setItem('saas_dept_meetings', JSON.stringify(mapping));
-            }
-          })
-          .catch(() => {});
-      }
-
-      const parsedUsers = JSON.parse(storedUsers);
-      const parsedDepts = JSON.parse(storedDepts);
-      const parsedOrgs = JSON.parse(storedOrgs);
-
-      setUsers(parsedUsers);
-      setDepartments(parsedDepts);
+      const storedCurrentUser = sessionStorage.getItem('saas_current_user');
+      const storedOrg = sessionStorage.getItem('saas_org');
+      const storedDept = sessionStorage.getItem('saas_dept');
+      const storedUsers = sessionStorage.getItem('saas_users');
+      const storedDepts = sessionStorage.getItem('saas_depts');
 
       if (storedCurrentUser) {
-        const currUser = JSON.parse(storedCurrentUser);
-        setUser(currUser);
-        
-        const org = parsedOrgs.find((o) => o.id === currUser.organizationId);
-        setOrganization(org || null);
-
-        const dept = parsedDepts.find((d) => d.id === currUser.departmentId);
-        setDepartment(dept || null);
+        setUser(JSON.parse(storedCurrentUser));
+      }
+      if (storedOrg) {
+        setOrganization(JSON.parse(storedOrg));
+      }
+      if (storedDept) {
+        setDepartment(JSON.parse(storedDept));
+      }
+      if (storedUsers) {
+        setUsers(JSON.parse(storedUsers));
+      }
+      if (storedDepts) {
+        setDepartments(JSON.parse(storedDepts));
       }
     } catch (e) {
-      console.error('Error loading database', e);
+      console.error('Error loading session from sessionStorage', e);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // Update localStorage when current user changes
-  const saveSession = (currUser, activeOrg, activeDept) => {
+  // Sync active department meetings from the backend database
+  useEffect(() => {
+    if (!department?.id) {
+      setDeptMeetingIds([]);
+      return;
+    }
+    fetch(`/api/departments/${department.id}/meetings`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.meeting_ids) {
+          setDeptMeetingIds(data.meeting_ids);
+        }
+      })
+      .catch((err) => console.error("Failed to fetch department meetings", err));
+  }, [department?.id]);
+
+  const saveSession = (currUser, activeOrg, activeDept, allUsers = null, allDepts = null) => {
     setUser(currUser);
     setOrganization(activeOrg);
     setDepartment(activeDept);
+
+    if (allUsers) {
+      setUsers(allUsers);
+      sessionStorage.setItem('saas_users', JSON.stringify(allUsers));
+    }
+    if (allDepts) {
+      setDepartments(allDepts);
+      sessionStorage.setItem('saas_depts', JSON.stringify(allDepts));
+    }
+
     if (currUser) {
-      localStorage.setItem('saas_current_user', JSON.stringify(currUser));
+      sessionStorage.setItem('saas_current_user', JSON.stringify(currUser));
     } else {
-      localStorage.removeItem('saas_current_user');
+      sessionStorage.removeItem('saas_current_user');
+    }
+    if (activeOrg) {
+      sessionStorage.setItem('saas_org', JSON.stringify(activeOrg));
+    } else {
+      sessionStorage.removeItem('saas_org');
+    }
+    if (activeDept) {
+      sessionStorage.setItem('saas_dept', JSON.stringify(activeDept));
+    } else {
+      sessionStorage.removeItem('saas_dept');
     }
   };
 
-  const login = (email, password) => {
-    const foundUser = users.find(
-      (u) => u.email.toLowerCase() === email.toLowerCase() && u.password === password
-    );
-    if (!foundUser) {
-      throw new Error('Invalid email or password');
+  const login = async (email, password) => {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    if (!res.ok) {
+      const errData = await res.json();
+      throw new Error(errData.detail || 'Invalid email or password');
     }
-
-    const orgs = JSON.parse(localStorage.getItem('saas_orgs') || '[]');
-    const org = orgs.find((o) => o.id === foundUser.organizationId);
-
-    const depts = JSON.parse(localStorage.getItem('saas_depts') || '[]');
-    const dept = depts.find((d) => d.id === foundUser.departmentId);
-
-    saveSession(foundUser, org, dept);
+    const data = await res.json();
+    saveSession(data.user, data.organization, data.department, data.users, data.departments);
     router.push('/');
-    return foundUser;
+    return data.user;
   };
 
   const logout = () => {
     saveSession(null, null, null);
+    sessionStorage.removeItem('saas_users');
+    sessionStorage.removeItem('saas_depts');
+    setUsers([]);
+    setDepartments([]);
     router.push('/login');
   };
 
-  const registerOrg = (orgName, adminName, adminEmail, adminPassword) => {
-    // Check if user already exists
-    if (users.some((u) => u.email.toLowerCase() === adminEmail.toLowerCase())) {
-      throw new Error('Email is already registered');
+  const registerOrg = async (orgName, adminName, adminEmail, adminPassword, adminDepartment) => {
+    const res = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        org_name: orgName,
+        admin_name: adminName,
+        admin_email: adminEmail,
+        admin_password: adminPassword,
+        department_name: adminDepartment,
+      }),
+    });
+    if (!res.ok) {
+      const errData = await res.json();
+      throw new Error(errData.detail || 'Failed to register organization');
     }
-
-    const orgId = 'org-' + Date.now();
-    const newOrg = { id: orgId, name: orgName };
-
-    const deptId = 'dept-' + Date.now();
-    const newDepts = [
-      { id: deptId, name: 'Engineering', organizationId: orgId },
-      { id: 'dept-mktg-' + Date.now(), name: 'Marketing', organizationId: orgId },
-      { id: 'dept-prod-' + Date.now(), name: 'Product Management', organizationId: orgId },
-    ];
-
-    const adminId = 'user-' + Date.now();
-    const newAdmin = {
-      id: adminId,
-      name: adminName,
-      email: adminEmail,
-      password: adminPassword,
-      role: 'OrgAdmin',
-      departmentId: deptId,
-      organizationId: orgId,
-    };
-
-    const updatedOrgs = [...JSON.parse(localStorage.getItem('saas_orgs') || '[]'), newOrg];
-    const updatedDepts = [...JSON.parse(localStorage.getItem('saas_depts') || '[]'), ...newDepts];
-    const updatedUsers = [...JSON.parse(localStorage.getItem('saas_users') || '[]'), newAdmin];
-
-    localStorage.setItem('saas_orgs', JSON.stringify(updatedOrgs));
-    localStorage.setItem('saas_depts', JSON.stringify(updatedDepts));
-    localStorage.setItem('saas_users', JSON.stringify(updatedUsers));
-
-    setUsers(updatedUsers);
-    setDepartments(updatedDepts);
-
-    saveSession(newAdmin, newOrg, newDepts[0]);
+    const data = await res.json();
+    saveSession(data.user, data.organization, data.department, data.users, data.departments);
     router.push('/');
-    return newAdmin;
+    return data.user;
   };
 
-  const createDepartment = (name) => {
+  const createDepartment = async (name) => {
     if (!organization) throw new Error('No active organization');
-    const deptId = 'dept-' + Date.now();
-    const newDept = { id: deptId, name, organizationId: organization.id };
-
-    const storedDepts = JSON.parse(localStorage.getItem('saas_depts') || '[]');
-    const updatedDepts = [...storedDepts, newDept];
-    localStorage.setItem('saas_depts', JSON.stringify(updatedDepts));
+    const res = await fetch(`/api/departments?organization_id=${organization.id}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) {
+      const errData = await res.json();
+      throw new Error(errData.detail || 'Failed to create department');
+    }
+    const newDept = await res.json();
+    
+    const updatedDepts = [...departments, newDept];
     setDepartments(updatedDepts);
+    sessionStorage.setItem('saas_depts', JSON.stringify(updatedDepts));
     return newDept;
   };
 
-  const createUser = (name, email, password, role, targetDeptId) => {
+  const createUser = async (name, email, password, role, targetDeptId) => {
     if (!organization) throw new Error('No active organization');
+    
+    // Ensure role matches backend (admin or employee)
+    const dbRole = role === 'admin' ? 'admin' : 'employee';
 
-    const storedUsers = JSON.parse(localStorage.getItem('saas_users') || '[]');
-    if (storedUsers.some((u) => u.email.toLowerCase() === email.toLowerCase())) {
-      throw new Error('User with this email already exists');
+    const res = await fetch(`/api/users?organization_id=${organization.id}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        email,
+        password,
+        role: dbRole,
+        department_id: targetDeptId,
+      }),
+    });
+    if (!res.ok) {
+      const errData = await res.json();
+      throw new Error(errData.detail || 'Failed to create user');
     }
-
-    const userId = 'user-' + Date.now();
-    const newUser = {
-      id: userId,
-      name,
-      email,
-      password,
-      role,
-      departmentId: targetDeptId,
-      organizationId: organization.id,
-    };
-
-    const updatedUsers = [...storedUsers, newUser];
-    localStorage.setItem('saas_users', JSON.stringify(updatedUsers));
+    const newUser = await res.json();
+    
+    const updatedUsers = [...users, newUser];
     setUsers(updatedUsers);
+    sessionStorage.setItem('saas_users', JSON.stringify(updatedUsers));
     return newUser;
   };
 
-  const switchDepartment = (deptId) => {
+  const switchDepartment = async (deptId) => {
     const dept = departments.find((d) => d.id === deptId);
     if (dept) {
+      const res = await fetch(`/api/users/${user.id}/department`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ department_id: deptId }),
+      });
+      if (!res.ok) {
+        throw new Error('Failed to update department');
+      }
       setDepartment(dept);
-      // Update department of current logged in user in active state and storage
+      sessionStorage.setItem('saas_dept', JSON.stringify(dept));
+      
       const updatedUser = { ...user, departmentId: deptId };
       setUser(updatedUser);
-      localStorage.setItem('saas_current_user', JSON.stringify(updatedUser));
+      sessionStorage.setItem('saas_current_user', JSON.stringify(updatedUser));
       
-      // Update in local users database as well so it persists
-      const storedUsers = JSON.parse(localStorage.getItem('saas_users') || '[]');
-      const userIndex = storedUsers.findIndex((u) => u.id === user.id);
-      if (userIndex !== -1) {
-        storedUsers[userIndex].departmentId = deptId;
-        localStorage.setItem('saas_users', JSON.stringify(storedUsers));
-        setUsers(storedUsers);
-      }
+      const updatedUsers = users.map((u) => u.id === user.id ? { ...u, departmentId: deptId } : u);
+      setUsers(updatedUsers);
+      sessionStorage.setItem('saas_users', JSON.stringify(updatedUsers));
     }
   };
 
-  const linkMeetingToDepartment = (meetingId, deptId) => {
-    const currentMappings = JSON.parse(localStorage.getItem('saas_dept_meetings') || '{}');
-    if (!currentMappings[deptId]) {
-      currentMappings[deptId] = [];
-    }
-    if (!currentMappings[deptId].includes(meetingId)) {
-      currentMappings[deptId].push(meetingId);
-      localStorage.setItem('saas_dept_meetings', JSON.stringify(currentMappings));
+  const linkMeetingToDepartment = async (meetingId, deptId) => {
+    await fetch(`/api/departments/${deptId}/meetings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ meeting_id: meetingId }),
+    });
+    if (deptId === department?.id) {
+      setDeptMeetingIds((prev) => [...prev, meetingId]);
     }
   };
 
   const getDepartmentMeetingIds = (deptId) => {
-    const currentMappings = JSON.parse(localStorage.getItem('saas_dept_meetings') || '{}');
-    return currentMappings[deptId] || [];
+    return deptMeetingIds;
   };
 
   const isMeetingInDepartment = (meetingId, deptId) => {
-    const ids = getDepartmentMeetingIds(deptId);
-    return ids.includes(meetingId);
+    return deptMeetingIds.includes(meetingId);
   };
 
   const activeOrgUsers = users.filter((u) => u.organizationId === organization?.id);
@@ -292,6 +241,7 @@ export function AuthProvider({ children }) {
         department,
         users: activeOrgUsers,
         departments: activeOrgDepartments,
+        deptMeetingIds,
         loading,
         login,
         logout,

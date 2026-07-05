@@ -8,7 +8,7 @@ export default function DepartmentManagementPage() {
   const { addToast } = useToast();
   const [name, setName] = useState('');
 
-  const isOrgAdmin = user?.role === 'OrgAdmin';
+  const isOrgAdmin = user?.role === 'admin';
 
   const handleSubmit = (e) => {
     e.preventDefault();

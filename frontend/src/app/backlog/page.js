@@ -20,7 +20,7 @@ function formatDate(d) {
 }
 
 export default function BacklogPage() {
-  const { department, getDepartmentMeetingIds } = useAuth();
+  const { department, getDepartmentMeetingIds, organization } = useAuth();
   const { addToast } = useToast();
   const [tasks, setTasks] = useState(null);
   const [meetings, setMeetings] = useState({});
@@ -51,7 +51,9 @@ export default function BacklogPage() {
   };
 
   useEffect(() => {
-    Promise.all([fetchTasks(), fetchMeetings()])
+    if (!organization?.id) return;
+    setLoading(true);
+    Promise.all([fetchTasks(null, organization.id), fetchMeetings(organization.id)])
       .then(([t, m]) => {
         setTasks(t);
         const map = {};
@@ -60,7 +62,7 @@ export default function BacklogPage() {
       })
       .catch(() => { })
       .finally(() => setLoading(false));
-  }, []);
+  }, [organization?.id]);
 
   // Filter tasks belonging to active department
   const filteredDeptTasks = useMemo(() => {

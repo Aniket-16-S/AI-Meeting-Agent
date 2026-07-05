@@ -6,24 +6,41 @@ import { SkeletonTable } from '@/components/SkeletonLoader';
 import EmptyState from '@/components/EmptyState';
 import { useAuth } from '@/lib/AuthContext';
 
-function formatDate(d) {
+function formatUploadDate(d) {
   if (!d) return '-';
   try {
-    return new Date(d).toLocaleDateString('en-US', {
-      month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    // The backend now returns ISO strings with a 'Z' suffix (UTC).
+    // JavaScript will convert them to the user's local timezone automatically.
+    return new Date(d).toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
     });
-  } catch { return '-'; }
+  } catch {
+    return '-';
+  }
 }
 
 export default function MeetingsPage() {
-  const { department, getDepartmentMeetingIds } = useAuth();
+  // Use deptMeetingIds array directly (not the stable function ref) so the
+  // useMemo below re-runs whenever the department meeting list updates.
+  const { department, deptMeetingIds, organization } = useAuth();
   const [meetings, setMeetings] = useState(null);
   const [taskCounts, setTaskCounts] = useState({});
   const [riskCounts, setRiskCounts] = useState({});
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([fetchMeetings(), fetchTasks(), fetchRisks()])
+    if (!organization?.id) return;
+    setLoading(true);
+    Promise.all([
+      fetchMeetings(organization.id),
+      fetchTasks(null, organization.id),
+      fetchRisks(null, organization.id)
+    ])
       .then(([m, t, r]) => {
         setMeetings(m);
         const tc = {};
@@ -35,14 +52,14 @@ export default function MeetingsPage() {
       })
       .catch(() => { })
       .finally(() => setLoading(false));
-  }, []);
+  }, [organization?.id]);
 
-  // Filter meetings to only show those linked to the user's active department
+  // Filter meetings to only show those linked to the user's active department.
+  // Depends on deptMeetingIds (the array) so this re-computes when IDs load.
   const filteredMeetings = useMemo(() => {
     if (!meetings || !department) return [];
-    const deptMtgIds = getDepartmentMeetingIds(department.id);
-    return meetings.filter((m) => deptMtgIds.includes(m.id));
-  }, [meetings, department, getDepartmentMeetingIds]);
+    return meetings.filter((m) => deptMeetingIds.includes(m.id));
+  }, [meetings, department, deptMeetingIds]);
 
   if (loading) {
     return (
@@ -90,7 +107,7 @@ export default function MeetingsPage() {
                       {m.title || m.file_name}
                     </Link>
                   </td>
-                  <td className="td-date">{formatDate(m.upload_date)}</td>
+                  <td className="td-date">{formatUploadDate(m.upload_date)}</td>
                   <td>
                     <span className="section-badge">{taskCounts[m.id] || 0}</span>
                   </td>

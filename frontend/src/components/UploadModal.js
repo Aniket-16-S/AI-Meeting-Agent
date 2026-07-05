@@ -4,14 +4,14 @@ import { uploadFiles, fetchMeetings } from '@/lib/api';
 import { useToast } from './Toast';
 import { useAuth } from '@/lib/AuthContext';
 
-export default function UploadModal({ onClose, onSuccess }) {
+export default function UploadModal({ onClose, onSuccess, onUploadQueued }) {
   const [files, setFiles] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [results, setResults] = useState(null);
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef(null);
   const { addToast } = useToast();
-  const { department, linkMeetingToDepartment, isMeetingInDepartment } = useAuth();
+  const { user, organization, department, linkMeetingToDepartment, isMeetingInDepartment } = useAuth();
 
   const handleFiles = useCallback((incoming) => {
     const arr = Array.from(incoming);
@@ -33,23 +33,23 @@ export default function UploadModal({ onClose, onSuccess }) {
     setUploading(true);
     setResults(null);
     try {
-      const data = await uploadFiles(files);
+      const data = await uploadFiles(files, organization?.id, user?.id, department?.id);
       setResults(data.results);
 
       let hasNew = false;
-      const hasSkipped = data.results.some((r) => r.status === 'skipped');
+      const hasSkipped = data.results.some((r) => r.status === 'skipped' || r.status === 'linked');
       let allMeetings = [];
       
       if (hasSkipped) {
         try {
-          allMeetings = await fetchMeetings();
+          allMeetings = await fetchMeetings(organization?.id);
         } catch (e) {
           console.error("Failed to fetch meetings for idempotency resolution", e);
         }
       }
 
       data.results.forEach((r) => {
-        if (r.status === 'skipped') {
+        if (r.status === 'skipped' || r.status === 'linked') {
           const matching = allMeetings.find(
             (m) => m.file_name === r.filename || m.title === r.filename
           );
@@ -65,12 +65,15 @@ export default function UploadModal({ onClose, onSuccess }) {
           } else {
             addToast(`"${r.filename}" already processed.`, 'warning');
           }
-        } else if (r.status === 'processed') {
+        } else if (r.status === 'accepted') {
           hasNew = true;
           if (r.meeting_id && department) {
             linkMeetingToDepartment(r.meeting_id, department.id);
           }
-          addToast(`"${r.filename}" processed successfully!`, 'success');
+          addToast(`"${r.filename}" upload accepted. Processing transcript in background...`, 'success');
+          if (onUploadQueued && r.meeting_id) {
+            onUploadQueued(r.meeting_id, r.filename);
+          }
         } else if (r.status === 'error') {
           addToast(`"${r.filename}": ${r.reason}`, 'error');
         }
@@ -173,11 +176,11 @@ export default function UploadModal({ onClose, onSuccess }) {
               {results.map((r, i) => (
                 <div key={i} className="upload-file-item">
                   <span className="upload-file-icon">
-                    {r.status === 'processed' ? '✅' : r.status === 'skipped' ? '⚠️' : '❌'}
+                    {r.status === 'accepted' ? '✅' : r.status === 'skipped' ? '⚠️' : '❌'}
                   </span>
                   <span className="upload-file-name">{r.filename}</span>
-                  <span className={`upload-file-status ${r.status === 'processed' ? 'success' : r.status === 'skipped' ? 'skipped' : 'error'}`}>
-                    {r.status === 'processed' ? 'Done' : r.status === 'skipped' ? 'Duplicate' : 'Error'}
+                  <span className={`upload-file-status ${r.status === 'accepted' ? 'success' : r.status === 'skipped' ? 'skipped' : 'error'}`}>
+                    {r.status === 'accepted' ? 'Done' : r.status === 'skipped' ? 'Duplicate' : 'Error'}
                   </span>
                 </div>
               ))}

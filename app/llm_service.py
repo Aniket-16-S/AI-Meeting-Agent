@@ -2,24 +2,20 @@ import asyncio
 import os
 import random
 import logging
+import json
+import re
 from datetime import datetime, timezone, timedelta
-from typing import TypedDict
+from typing import TypedDict, Optional
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from google.api_core.exceptions import ResourceExhausted, InvalidArgument, ServiceUnavailable
 from langgraph.graph import StateGraph, END
-from app.schema import MeetingExtractionResult
+from app.schema import MeetingExtractionResult, TaskSchema, RiskSchema
 
 logger = logging.getLogger(__name__)
 
 
-
-
 FALLBACK_MODELS = [
-    # "gemini-2.0-flash",
-    # "gemini-2.0-flash-lite",
-    # "gemini-2.5-pro",
-    # "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
     "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
@@ -33,18 +29,267 @@ _MAX_TRANSCRIPT_CHARS = 500_000
 
 
 # Retry / timeout configuration
-
-
-# onlly to transient errors (quota exhausted, 503 high demand).
 _MAX_RETRIES_PER_MODEL = 3
 
 # Maximum seconds the entire extraction (all models + retries)
-
 _TOTAL_TIMEOUT_SECONDS = 300  # 5 minutes
 
 # Base wait (seconds) for the first retry; doubles each subsequent attempt.
 _BACKOFF_BASE_SECONDS = 5
 
+
+# ── Robust Transient Error Detection ─────────────────────────────────────────
+
+def is_transient_error(e: Exception) -> bool:
+    """
+    Check if an exception is a transient error (e.g. 503 high demand or 429 quota/rate limit).
+    Handles standard Google API exception classes and general wrapped/unwrapped
+    exceptions containing status codes or message patterns indicating transient state.
+    """
+    err_str = str(e).lower()
+    class_name = type(e).__name__.lower()
+
+    # Match class names
+    if "resourceexhausted" in class_name or "serviceunavailable" in class_name or "servererror" in class_name:
+        return True
+
+    # Match string patterns
+    transient_patterns = [
+        "503", "429", "unavailable", "resource_exhausted", "resource exhausted",
+        "service unavailable", "rate limit", "high demand", "temp", "try again",
+        "quota"
+    ]
+    if any(pat in err_str for pat in transient_patterns):
+        return True
+
+    return False
+
+
+# ── Graceful Degradation / Truncated JSON Parsers ────────────────────────────
+
+def _extract_json_objects(text: str) -> list[dict]:
+    """
+    Scans a text block and extracts all top-level balanced JSON objects.
+    Extremely robust against trailing truncated content.
+    """
+    objs = []
+    stack = []
+    start_idx = -1
+    for i, char in enumerate(text):
+        if char == '{':
+            if not stack:
+                start_idx = i
+            stack.append('{')
+        elif char == '}':
+            if stack:
+                stack.pop()
+                if not stack:
+                    candidate = text[start_idx:i+1]
+                    try:
+                        objs.append(json.loads(candidate))
+                    except json.JSONDecodeError:
+                        pass
+    return objs
+
+
+def parse_truncated_json(raw_text: str) -> dict:
+    """
+    Extract as much valid content as possible from a truncated/malformed JSON string.
+    """
+    result = {
+        "meeting_title": "AI Generated Meeting",
+        "meeting_summary": "",
+        "speakers": [],
+        "tasks": [],
+        "risks": []
+    }
+
+    # Extract simple fields via regex
+    title_match = re.search(r'"meeting_title"\s*:\s*"([^"]+)"', raw_text)
+    if title_match:
+        result["meeting_title"] = title_match.group(1)
+
+    summary_match = re.search(r'"meeting_summary"\s*:\s*"([^"]+)"', raw_text)
+    if summary_match:
+        result["meeting_summary"] = summary_match.group(1)
+
+    # Extract speakers array
+    speakers_match = re.search(r'"speakers"\s*:\s*\[([^\]]*)\]', raw_text)
+    if speakers_match:
+        speakers_str = speakers_match.group(1)
+        result["speakers"] = [
+            s.strip().strip('"').strip("'")
+            for s in speakers_str.split(",")
+            if s.strip()
+        ]
+
+    # Locate array sections to isolate tasks vs risks scanner space
+    tasks_idx = raw_text.find('"tasks"')
+    risks_idx = raw_text.find('"risks"')
+
+    if tasks_idx != -1:
+        tasks_end = risks_idx if risks_idx > tasks_idx else len(raw_text)
+        tasks_text = raw_text[tasks_idx:tasks_end]
+        raw_tasks = _extract_json_objects(tasks_text)
+        for t in raw_tasks:
+            try:
+                sanitized = sanitize_task_dict(t)
+                validated = TaskSchema(**sanitized)
+                result["tasks"].append(validated.model_dump())
+            except Exception as e:
+                logger.warning("Dropped malformed task during partial parsing: %s | Error: %s", t, e)
+
+    if risks_idx != -1:
+        risks_end = len(raw_text)
+        risks_text = raw_text[risks_idx:risks_end]
+        raw_risks = _extract_json_objects(risks_text)
+        for r in raw_risks:
+            try:
+                sanitized = sanitize_risk_dict(r)
+                validated = RiskSchema(**sanitized)
+                result["risks"].append(validated.model_dump())
+            except Exception as e:
+                logger.warning("Dropped malformed risk during partial parsing: %s | Error: %s", r, e)
+
+    return result
+
+
+def sanitize_task_dict(t: dict) -> dict:
+    """
+    Sanitize and normalize task dictionary fields (casing, spelling, format)
+    before Pydantic validation to prevent strict Literal checks from dropping valid tasks.
+    """
+    cleaned = dict(t)
+
+    # 1. Normalize Category -> Literal["Action Item", "Decision", "Follow-up", "Info"]
+    cat = str(cleaned.get("category", "")).strip().lower().replace("_", " ").replace("-", " ")
+    if "action" in cat:
+        cleaned["category"] = "Action Item"
+    elif "decision" in cat:
+        cleaned["category"] = "Decision"
+    elif "follow" in cat:
+        cleaned["category"] = "Follow-up"
+    elif "info" in cat:
+        cleaned["category"] = "Info"
+    else:
+        cleaned["category"] = "Info"  # default fallback
+
+    # 2. Normalize Priority -> Literal["Low", "Medium", "High", "Critical"]
+    prio = str(cleaned.get("priority", "")).strip().lower()
+    if "low" in prio:
+        cleaned["priority"] = "Low"
+    elif "high" in prio:
+        cleaned["priority"] = "High"
+    elif "critical" in prio:
+        cleaned["priority"] = "Critical"
+    else:
+        cleaned["priority"] = "Medium"  # default fallback
+
+    # 3. Normalize Deadline Type -> Literal["EXPLICIT", "INFERRED", "NONE"]
+    dl = str(cleaned.get("deadline_type", "")).strip().upper()
+    if dl in ("EXPLICIT", "INFERRED", "NONE"):
+        cleaned["deadline_type"] = dl
+    elif "explicit" in dl.lower():
+        cleaned["deadline_type"] = "EXPLICIT"
+    elif "inferred" in dl.lower():
+        cleaned["deadline_type"] = "INFERRED"
+    else:
+        cleaned["deadline_type"] = "NONE"
+
+    # 4. Handle empty string values for optional fields
+    for field in ("due_date", "due_time", "raw_deadline"):
+        if cleaned.get(field) == "":
+            cleaned[field] = None
+
+    return cleaned
+
+
+def sanitize_risk_dict(r: dict) -> dict:
+    """
+    Sanitize and normalize risk dictionary fields before Pydantic validation.
+    """
+    cleaned = dict(r)
+
+    # 1. Normalize Severity -> Literal["Low", "Medium", "High", "Critical"]
+    sev = str(cleaned.get("severity", "")).strip().lower()
+    if "low" in sev:
+        cleaned["severity"] = "Low"
+    elif "high" in sev:
+        cleaned["severity"] = "High"
+    elif "critical" in sev:
+        cleaned["severity"] = "Critical"
+    else:
+        cleaned["severity"] = "Medium"  # default fallback
+
+    return cleaned
+
+
+def validate_extracted_dict(data: dict) -> dict:
+    """
+    Validates dictionary elements individually to ensure Pydantic compliance,
+    dropping only invalid items instead of crashing the whole graph node.
+    """
+    validated_tasks = []
+    for t in data.get("tasks", []):
+        try:
+            sanitized = sanitize_task_dict(t)
+            validated_tasks.append(TaskSchema(**sanitized).model_dump())
+        except Exception as exc:
+            logger.warning("Dropped malformed task from valid JSON: %s | Error: %s", t, exc)
+
+    validated_risks = []
+    for r in data.get("risks", []):
+        try:
+            sanitized = sanitize_risk_dict(r)
+            validated_risks.append(RiskSchema(**sanitized).model_dump())
+        except Exception as exc:
+            logger.warning("Dropped malformed risk from valid JSON: %s | Error: %s", r, exc)
+
+    return {
+        "meeting_title": data.get("meeting_title") or "AI Generated Meeting",
+        "meeting_summary": data.get("meeting_summary") or "",
+        "speakers": data.get("speakers") or [],
+        "tasks": validated_tasks,
+        "risks": validated_risks,
+    }
+
+
+def safe_parse_and_validate(raw_text) -> dict:
+    """
+    Safely parses JSON and validates it. Falls back to truncated parsing on failure.
+    Handles string input as well as lists of content blocks returned by the model.
+    """
+    if isinstance(raw_text, list):
+        content_str = ""
+        for block in raw_text:
+            if isinstance(block, dict) and "text" in block:
+                content_str += block["text"]
+            elif isinstance(block, str):
+                content_str += block
+        raw_text = content_str
+    elif not isinstance(raw_text, str):
+        raw_text = str(raw_text)
+
+    text_clean = raw_text.strip()
+    if text_clean.startswith("```"):
+        lines = text_clean.splitlines()
+        if len(lines) > 2:
+            text_clean = "\n".join(lines[1:-1]).strip()
+
+    try:
+        data = json.loads(text_clean)
+        if not isinstance(data, dict):
+            raise ValueError("JSON output is not a dictionary.")
+    except Exception as exc:
+        logger.warning(
+            "Initial JSON parsing failed. Running truncated JSON fallback parser: %s", exc
+        )
+        data = parse_truncated_json(text_clean)
+
+    return validate_extracted_dict(data)
+
+
+# ── System prompt builder ────────────────────────────────────────────────────
 
 def _build_system_prompt() -> str:
     """
@@ -123,6 +368,13 @@ def _build_system_prompt() -> str:
         f"  'Follow-up'   -> something to revisit or monitor later.\n"
         f"  'Info'        -> a note or observation with no owner or outcome.\n\n"
 
+        # ── NO REPETITION / INFINITE LOOPS ───────────────────────────────────
+        f"=== NO REPETITION / INFINITE GENERATION LOOPS ===\n"
+        f"Do NOT get stuck in generation loops. Output each unique task, speaker, "
+        f"or risk EXACTLY once. Do NOT output the same item multiple times. "
+        f"Keep the list of tasks concise, literal, and completely free of repetitions "
+        f"or hallucinated duplicates.\n\n"
+
         # ── EXTRACTION TASKS ─────────────────────────────────────────────────
         f"=== EXTRACT THE FOLLOWING ===\n"
         f"1. A concise meeting summary.\n"
@@ -132,9 +384,16 @@ def _build_system_prompt() -> str:
         f"4. All risks and issues discussed.\n\n"
 
         f"Return null for due_date if no deadline or timeframe is mentioned. "
-        f"Return null for due_time if no time-of-day context is mentioned."
+        f"Return null for due_time if no time-of-day context is mentioned.\n\n"
+        f"=== Completeness ===\n"
+        f"Always process the entire transcript before generating output. "
+        f"Do not stop at topic changes, breaks, or phrases like 'Let\\'s continue' or 'Next issue.' "
+        f"Before finalizing, perform one verification pass to ensure all action items, decisions, "
+        f"owners, priorities, and due dates from the full transcript have been captured."
     )
 
+
+# ── Core LLM invocation ──────────────────────────────────────────────────────
 
 async def _invoke_with_backoff(
     model_name: str,
@@ -145,17 +404,19 @@ async def _invoke_with_backoff(
     """
     Attempts LLM extraction for a single model with exponential backoff.
     Raises the last exception if all retries are exhausted.
-    Retries only on transient errors (quota / 503 high-demand).
+    Retries only on transient errors (quota / 503 high-demand / 429).
     Immediately re-raises on permanent errors (invalid argument, etc.).
     """
     llm = ChatGoogleGenerativeAI(
         model=model_name,
         api_key=api_key,
         temperature=0,
+        max_output_tokens=8192,
         # Disable LangChain's own internal retry so our backoff controls everything.
         max_retries=0,
+        response_mime_type="application/json",
+        response_schema=MeetingExtractionResult.model_json_schema(),
     )
-    structured_llm = llm.with_structured_output(MeetingExtractionResult)
     messages = [
         ("system", system_prompt),
         ("user", f"Here is the transcript:\n\n{transcript}"),
@@ -166,45 +427,45 @@ async def _invoke_with_backoff(
     for attempt in range(1, _MAX_RETRIES_PER_MODEL + 1):
         try:
             logger.info(f"[{model_name}] attempt {attempt}/{_MAX_RETRIES_PER_MODEL}")
-            result = await structured_llm.ainvoke(messages)
+            response = await llm.ainvoke(messages)
+            
+            # Safe parse and validate (supports recovery if truncated)
+            result = safe_parse_and_validate(response.content)
+            
+            # Simple guard: if the output has absolutely no useful fields, treat it as a failure
+            if not result.get("meeting_summary") and not result.get("tasks") and not result.get("risks"):
+                raise ValueError("LLM returned empty or completely malformed JSON structure.")
+
             logger.info(f"[{model_name}] extraction succeeded on attempt {attempt}.")
-            return result.model_dump()
-
-        except (ResourceExhausted, ServiceUnavailable) as e:
-            last_exc = e
-            # Only retry on transient errors.
-            if attempt < _MAX_RETRIES_PER_MODEL:
-                # Exponential backoff with ±20 % jitter to avoid thundering-herd.
-                wait = _BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
-                jitter = wait * 0.2 * (2 * random.random() - 1)  # ±20 %
-                sleep_for = round(wait + jitter, 2)
-                logger.warning(
-                    f"[{model_name}] transient error on attempt {attempt} "
-                    f"({type(e).__name__}). "
-                    f"Retrying in {sleep_for}s... | {e}"
-                )
-                await asyncio.sleep(sleep_for)
-            else:
-                logger.warning(
-                    f"[{model_name}] exhausted {_MAX_RETRIES_PER_MODEL} retries "
-                    f"({type(e).__name__}). Moving to next model."
-                )
-
-        except InvalidArgument as e:
-            # Permanent error for this model — skip immediately, no retries.
-            logger.warning(
-                f"[{model_name}] permanent error (InvalidArgument): {e}. "
-                f"Skipping to next model."
-            )
-            raise  # caller will catch and move on
+            return result
 
         except Exception as e:
-            # Unknown / unexpected error — log and skip model.
-            logger.error(
-                f"[{model_name}] unexpected error on attempt {attempt}: "
-                f"{type(e).__name__}: {e}"
-            )
-            raise  # caller will catch and move on
+            if is_transient_error(e):
+                last_exc = e
+                # Only retry on transient errors.
+                if attempt < _MAX_RETRIES_PER_MODEL:
+                    # Exponential backoff with ±20 % jitter to avoid thundering-herd.
+                    wait = _BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+                    jitter = wait * 0.2 * (2 * random.random() - 1)  # ±20 %
+                    sleep_for = round(wait + jitter, 2)
+                    logger.warning(
+                        f"[{model_name}] transient error on attempt {attempt} "
+                        f"({type(e).__name__}). "
+                        f"Retrying in {sleep_for}s... | {e}"
+                    )
+                    await asyncio.sleep(sleep_for)
+                else:
+                    logger.warning(
+                        f"[{model_name}] exhausted {_MAX_RETRIES_PER_MODEL} retries "
+                        f"({type(e).__name__}). Moving to next model."
+                    )
+            else:
+                # Permanent error or parsing error — skip model.
+                logger.error(
+                    f"[{model_name}] non-transient error on attempt {attempt}: "
+                    f"{type(e).__name__}: {e}. Skipping model."
+                )
+                raise  # caller will catch and move on
 
     raise last_exc  # type: ignore[misc]
 
