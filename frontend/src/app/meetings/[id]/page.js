@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useParams } from 'next/navigation';
 import { fetchMeeting, fetchTasks, fetchRisks, updateTaskStatus } from '@/lib/api';
 import Tabs from '@/components/Tabs';
@@ -9,6 +9,7 @@ import EmptyState from '@/components/EmptyState';
 import { SkeletonTable } from '@/components/SkeletonLoader';
 import EntityResolutionBadge from '@/components/EntityResolutionBadge';
 import { useToast } from '@/components/Toast';
+import { useAuth } from '@/lib/AuthContext';
 
 function formatDate(d) {
   if (!d) return '-';
@@ -150,7 +151,7 @@ function TranscriptTab({ transcript }) {
 export default function MeetingDetailPage() {
   const params = useParams();
   const meetingId = params.id;
-  const { department, isMeetingInDepartment, organization } = useAuth();
+  const { user, department, isMeetingInDepartment, organization } = useAuth();
   const { addToast } = useToast();
 
   const [meeting, setMeeting] = useState(null);
@@ -193,7 +194,18 @@ export default function MeetingDetailPage() {
       .finally(() => setLoading(false));
   }, [meetingId, organization?.id]);
 
-  const hasAccess = isMeetingInDepartment(meetingId, department?.id);
+  // Check if the logged in user is assigned any tasks in this meeting
+  const userHasTasksInMeeting = useMemo(() => {
+    if (!tasks || !user) return false;
+    const userFirstName = user.name.trim().split(/\s+/)[0].toLowerCase();
+    return tasks.some((t) => {
+      if (!t.owner) return false;
+      const ownerLower = t.owner.toLowerCase();
+      return ownerLower === user.name.toLowerCase() || ownerLower === userFirstName;
+    });
+  }, [tasks, user]);
+
+  const hasAccess = isMeetingInDepartment(meetingId, department?.id) || userHasTasksInMeeting;
 
   if (loading) {
     return (

@@ -27,10 +27,11 @@ function formatUploadDate(d) {
 export default function MeetingsPage() {
   // Use deptMeetingIds array directly (not the stable function ref) so the
   // useMemo below re-runs whenever the department meeting list updates.
-  const { department, deptMeetingIds, organization } = useAuth();
+  const { user, department, deptMeetingIds, organization } = useAuth();
   const [meetings, setMeetings] = useState(null);
   const [taskCounts, setTaskCounts] = useState({});
   const [riskCounts, setRiskCounts] = useState({});
+  const [myMeetingIds, setMyMeetingIds] = useState(new Set());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -44,22 +45,52 @@ export default function MeetingsPage() {
       .then(([m, t, r]) => {
         setMeetings(m);
         const tc = {};
-        t.forEach((task) => { tc[task.meeting_id] = (tc[task.meeting_id] || 0) + 1; });
+        
+        // Find which meeting IDs have tasks assigned to this user
+        const userFullName = user?.name?.trim().toLowerCase();
+        const userFirstName = user?.name?.trim().split(/\s+/)[0].toLowerCase();
+        const myMtgIds = new Set();
+
+        t.forEach((task) => {
+          tc[task.meeting_id] = (tc[task.meeting_id] || 0) + 1;
+          
+          let isAssigned = false;
+          if (Array.isArray(task.owners_list)) {
+            isAssigned = task.owners_list.some((o) => {
+              if (!o) return false;
+              const oLower = String(o).trim().toLowerCase();
+              return oLower === userFullName || oLower === userFirstName;
+            });
+          }
+          if (!isAssigned && task.owner) {
+            const ownerLower = String(task.owner).trim().toLowerCase();
+            isAssigned = (
+              ownerLower === userFullName ||
+              ownerLower === userFirstName ||
+              ownerLower.includes(userFullName) ||
+              ownerLower.includes(userFirstName)
+            );
+          }
+          if (isAssigned) {
+            myMtgIds.add(task.meeting_id);
+          }
+        });
         setTaskCounts(tc);
+        setMyMeetingIds(myMtgIds);
+
         const rc = {};
         r.forEach((risk) => { rc[risk.meeting_id] = (rc[risk.meeting_id] || 0) + 1; });
         setRiskCounts(rc);
       })
       .catch(() => { })
       .finally(() => setLoading(false));
-  }, [organization?.id]);
+  }, [organization?.id, user]);
 
-  // Filter meetings to only show those linked to the user's active department.
-  // Depends on deptMeetingIds (the array) so this re-computes when IDs load.
+  // Filter meetings to only show those linked to the user's active department or those where the user has tasks.
   const filteredMeetings = useMemo(() => {
     if (!meetings || !department) return [];
-    return meetings.filter((m) => deptMeetingIds.includes(m.id));
-  }, [meetings, department, deptMeetingIds]);
+    return meetings.filter((m) => deptMeetingIds.includes(m.id) || myMeetingIds.has(m.id));
+  }, [meetings, department, deptMeetingIds, myMeetingIds]);
 
   if (loading) {
     return (

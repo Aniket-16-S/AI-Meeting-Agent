@@ -109,14 +109,32 @@ export default function DashboardPage() {
 
   // Member-Specific calculations
   const myTasks = useMemo(() => {
-    if (!deptTasks || !user) return [];
+    if (!tasks || !user) return [];
+    const userFullName = user.name.trim().toLowerCase();
     const userFirstName = user.name.trim().split(/\s+/)[0].toLowerCase();
-    return deptTasks.filter((t) => {
+
+    return tasks.filter((t) => {
+      // 1. Check owners_list first
+      if (Array.isArray(t.owners_list)) {
+        const matchesList = t.owners_list.some((o) => {
+          if (!o) return false;
+          const oLower = String(o).trim().toLowerCase();
+          return oLower === userFullName || oLower === userFirstName;
+        });
+        if (matchesList) return true;
+      }
+
+      // 2. Fall back to raw owner string
       if (!t.owner) return false;
-      const ownerLower = t.owner.toLowerCase();
-      return ownerLower === user.name.toLowerCase() || ownerLower === userFirstName;
+      const ownerLower = String(t.owner).trim().toLowerCase();
+      return (
+        ownerLower === userFullName || 
+        ownerLower === userFirstName ||
+        ownerLower.includes(userFullName) ||
+        ownerLower.includes(userFirstName)
+      );
     });
-  }, [deptTasks, user]);
+  }, [tasks, user]);
 
   const sortedMyTasks = useMemo(() => {
     return [...myTasks].sort((a, b) => {
@@ -220,11 +238,28 @@ export default function DashboardPage() {
       if (selectedUserFilter === 'Unassigned') {
         return t.owner === 'Unassigned' || !t.owner;
       }
-      if (!t.owner) return false;
-      const ownerLower = t.owner.toLowerCase();
+
       const selUserLower = selectedUserFilter.toLowerCase();
       const selUserFirstName = selectedUserFilter.trim().split(/\s+/)[0].toLowerCase();
-      return ownerLower === selUserLower || ownerLower === selUserFirstName;
+
+      // Check owners_list first
+      if (Array.isArray(t.owners_list)) {
+        const matchesList = t.owners_list.some((o) => {
+          if (!o) return false;
+          const oLower = String(o).trim().toLowerCase();
+          return oLower === selUserLower || oLower === selUserFirstName;
+        });
+        if (matchesList) return true;
+      }
+
+      if (!t.owner) return false;
+      const ownerLower = String(t.owner).trim().toLowerCase();
+      return (
+        ownerLower === selUserLower || 
+        ownerLower === selUserFirstName ||
+        ownerLower.includes(selUserLower) ||
+        ownerLower.includes(selUserFirstName)
+      );
     });
   }, [deptTasks, selectedUserFilter]);
 

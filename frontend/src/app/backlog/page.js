@@ -20,7 +20,7 @@ function formatDate(d) {
 }
 
 export default function BacklogPage() {
-  const { department, getDepartmentMeetingIds, organization } = useAuth();
+  const { user, department, getDepartmentMeetingIds, organization } = useAuth();
   const { addToast } = useToast();
   const [tasks, setTasks] = useState(null);
   const [meetings, setMeetings] = useState({});
@@ -64,12 +64,38 @@ export default function BacklogPage() {
       .finally(() => setLoading(false));
   }, [organization?.id]);
 
-  // Filter tasks belonging to active department
+  // Filter tasks belonging to active department or assigned to the user
   const filteredDeptTasks = useMemo(() => {
-    if (!tasks || !department) return [];
+    if (!tasks || !department || !user) return [];
     const deptMtgIds = getDepartmentMeetingIds(department.id);
-    return tasks.filter((t) => deptMtgIds.includes(t.meeting_id));
-  }, [tasks, department, getDepartmentMeetingIds]);
+    
+    const userFullName = user.name.trim().toLowerCase();
+    const userFirstName = user.name.trim().split(/\s+/)[0].toLowerCase();
+
+    return tasks.filter((t) => {
+      const isInDept = deptMtgIds.includes(t.meeting_id);
+      
+      let isAssignedToMe = false;
+      if (Array.isArray(t.owners_list)) {
+        isAssignedToMe = t.owners_list.some((o) => {
+          if (!o) return false;
+          const oLower = String(o).trim().toLowerCase();
+          return oLower === userFullName || oLower === userFirstName;
+        });
+      }
+      if (!isAssignedToMe && t.owner) {
+        const ownerLower = String(t.owner).trim().toLowerCase();
+        isAssignedToMe = (
+          ownerLower === userFullName ||
+          ownerLower === userFirstName ||
+          ownerLower.includes(userFullName) ||
+          ownerLower.includes(userFirstName)
+        );
+      }
+      
+      return isInDept || isAssignedToMe;
+    });
+  }, [tasks, department, getDepartmentMeetingIds, user]);
 
   const filtered = useMemo(() => {
     return filteredDeptTasks.filter((t) => {
@@ -77,8 +103,17 @@ export default function BacklogPage() {
       if (filterCategory && t.category !== filterCategory) return false;
       if (filterStatus && t.status !== filterStatus) return false;
       if (filterOwner) {
-        const owner = (t.owner || '').toLowerCase();
-        if (!owner.includes(filterOwner.toLowerCase())) return false;
+        const queryLower = filterOwner.toLowerCase();
+        const matchesOwnerStr = (t.owner || '').toLowerCase().includes(queryLower);
+        
+        let matchesOwnersList = false;
+        if (Array.isArray(t.owners_list)) {
+          matchesOwnersList = t.owners_list.some(o => 
+            (o || '').toLowerCase().includes(queryLower)
+          );
+        }
+        
+        if (!matchesOwnerStr && !matchesOwnersList) return false;
       }
       return true;
     });
