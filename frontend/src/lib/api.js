@@ -65,12 +65,12 @@ export async function uploadFiles(files, organizationId, uploadedBy, teamId = nu
   return res.json();
 }
 
-export async function queryAgent(question, organizationId) {
+export async function queryAgent(question, organizationId, userName) {
   if (!organizationId) throw new Error('Organization ID is required');
   const res = await fetch(`${API_BASE}/query?organization_id=${organizationId}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, user_name: userName }),
   });
   if (!res.ok) throw new Error('Query failed');
   return res.json();

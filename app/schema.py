@@ -136,3 +136,4 @@ class SearchFilters(BaseModel):
 
 class QueryRequest(BaseModel):
     question: str
+    user_name: Optional[str] = Field(None, description="The name of the user asking the query, used to resolve 'my tasks'")

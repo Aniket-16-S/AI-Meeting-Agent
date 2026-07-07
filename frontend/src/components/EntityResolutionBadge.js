@@ -82,9 +82,9 @@ export default function EntityResolutionBadge({ ownerName }) {
         gap: '4px',
         padding: '4px 10px',
         borderRadius: '20px',
-        background: 'hsl(220, 10%, 92%)',
-        border: '1px solid hsl(220, 10%, 86%)',
-        color: 'hsl(220, 10%, 45%)',
+        background: 'var(--bg-tertiary)',
+        border: '1px solid var(--border-primary)',
+        color: 'var(--text-secondary)',
         fontSize: '12px',
         fontWeight: 500,
       }}

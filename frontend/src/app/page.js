@@ -54,25 +54,28 @@ export default function DashboardPage() {
     setMounted(true);
   }, []);
 
-  // Sorting for Member Tasks
-  const [sortAsc, setSortAsc] = useState(true);
+  // Sorting and Grouping for Member Tasks
+  const [sortMode, setSortMode] = useState('smart'); // date-asc, date-desc, priority-desc, priority-asc, smart
+  const [groupBy, setGroupBy] = useState('none'); // none, category, meeting
 
   // User Filter for Manager Backlog
   const [selectedUserFilter, setSelectedUserFilter] = useState('');
 
-  const handleToggleComplete = async (taskId, currentStatus) => {
-    const newStatus = currentStatus === 'Open' ? 'Closed' : 'Open';
+  const handleStatusChange = async (taskId, newStatus) => {
     try {
       await updateTaskStatus(taskId, newStatus);
       setTasks((prevTasks) =>
         prevTasks?.map((t) => (t.id === taskId ? { ...t, status: newStatus } : t))
       );
-      addToast(
-        newStatus === 'Closed'
-          ? 'Task marked as completed!'
-          : 'Task reopened!',
-        'success'
-      );
+      let msg = 'Task status updated!';
+      if (newStatus === 'Closed') {
+        msg = 'Task marked as completed!';
+      } else if (newStatus === 'In Progress') {
+        msg = 'Task marked as In Progress!';
+      } else if (newStatus === 'Open') {
+        msg = 'Task reopened!';
+      }
+      addToast(msg, 'success');
     } catch (err) {
       addToast(err.message || 'Failed to update task status', 'error');
     }
@@ -137,43 +140,89 @@ export default function DashboardPage() {
   }, [tasks, user]);
 
   const sortedMyTasks = useMemo(() => {
-    return [...myTasks].sort((a, b) => {
-      const dateA = a.due_date ? new Date(a.due_date) : new Date('9999-12-31');
-      const dateB = b.due_date ? new Date(b.due_date) : new Date('9999-12-31');
-      return sortAsc ? dateA - dateB : dateB - dateA;
+    let sorted = [...myTasks];
+    
+    if (sortMode === 'smart') {
+      const pWeights = { 'Critical': 1, 'High': 0.75, 'Medium': 0.5, 'Low': 0.25 };
+      sorted.sort((a, b) => {
+        const pA = pWeights[a.priority] || 0.25;
+        const pB = pWeights[b.priority] || 0.25;
+        
+        const hoursA = a.due_date ? (new Date(a.due_date) - new Date()) / (1000 * 60 * 60) : 9999;
+        const hoursB = b.due_date ? (new Date(b.due_date) - new Date()) / (1000 * 60 * 60) : 9999;
+        
+        const scoreA = (pA * 0.6) + ((1 / (Math.max(hoursA, 0) + 24)) * 0.4 * 100);
+        const scoreB = (pB * 0.6) + ((1 / (Math.max(hoursB, 0) + 24)) * 0.4 * 100);
+        
+        return scoreB - scoreA;
+      });
+    } else if (sortMode.startsWith('priority')) {
+      const pWeights = { 'Critical': 4, 'High': 3, 'Medium': 2, 'Low': 1 };
+      sorted.sort((a, b) => {
+        const pA = pWeights[a.priority] || 1;
+        const pB = pWeights[b.priority] || 1;
+        return sortMode === 'priority-desc' ? pB - pA : pA - pB;
+      });
+    } else {
+      sorted.sort((a, b) => {
+        const dateA = a.due_date ? new Date(a.due_date) : new Date('9999-12-31');
+        const dateB = b.due_date ? new Date(b.due_date) : new Date('9999-12-31');
+        return sortMode === 'date-asc' ? dateA - dateB : dateB - dateA;
+      });
+    }
+    return sorted;
+  }, [myTasks, sortMode]);
+
+  const groupedMyTasks = useMemo(() => {
+    if (groupBy === 'none') return { 'All Tasks': sortedMyTasks };
+    
+    const groups = {};
+    const catLabels = {
+      'Action Item': 'Action Items',
+      'Decision': 'Agreements & Policies',
+      'Follow-up': 'Follow-ups',
+      'Info': 'General Notes',
+    };
+    
+    sortedMyTasks.forEach((t) => {
+      let key = 'Other';
+      if (groupBy === 'category') {
+        key = catLabels[t.category] || t.category || 'Other';
+      } else if (groupBy === 'meeting') {
+        const mtg = meetings?.find((m) => m.id === t.meeting_id);
+        key = mtg ? (mtg.title || mtg.file_name) : 'No Meeting Source';
+      }
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(t);
     });
-  }, [myTasks, sortAsc]);
+    return groups;
+  }, [sortedMyTasks, groupBy, meetings]);
 
   const memberKPIs = useMemo(() => {
-    if (!myTasks) return { open: 0, thisWeek: 0, overdue: 0 };
+    if (!myTasks) return { open: 0, closed: 0, total: 0, completionRate: 100, overdue: 0 };
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const startOfWeek = new Date(today);
-    const endOfWeek = new Date(today);
-    endOfWeek.setDate(today.getDate() + 7);
-
-    const open = myTasks.filter((t) => t.status === 'Open').length;
-
-    const thisWeek = myTasks.filter((t) => {
-      if (t.status !== 'Open' || !t.due_date) return false;
-      const d = new Date(t.due_date);
-      return d >= startOfWeek && d <= endOfWeek;
-    }).length;
+    const open = myTasks.filter((t) => t.status === 'Open' || t.status === 'In Progress').length;
+    const closed = myTasks.filter((t) => t.status === 'Closed').length;
+    const total = open + closed;
+    const completionRate = total > 0 ? Math.round((closed / total) * 100) : 100;
 
     const overdue = myTasks.filter((t) => {
-      if (t.status !== 'Open' || !t.due_date) return false;
-      const d = new Date(t.due_date);
-      return d < today;
+      if ((t.status === 'Open' || t.status === 'In Progress') && t.due_date) {
+        const d = new Date(t.due_date);
+        return d < today;
+      }
+      return false;
     }).length;
 
-    return { open, thisWeek, overdue };
+    return { open, closed, total, completionRate, overdue };
   }, [myTasks]);
 
   // Manager-Specific calculations
   const managerKPIs = useMemo(() => {
     if (!deptTasks || !deptRis) return { openTasks: 0, closedTasks: 0, criticalRisks: 0, unassigned: 0 };
-    const openTasks = deptTasks.filter((t) => t.status === 'Open').length;
+    const openTasks = deptTasks.filter((t) => t.status === 'Open' || t.status === 'In Progress').length;
     const closedTasks = deptTasks.filter((t) => t.status === 'Closed' || t.status === 'Done').length;
     const criticalRisks = deptRis.filter((r) => r.severity === 'Critical').length;
     const unassigned = deptTasks.filter((t) => t.owner === 'Unassigned' || !t.owner).length;
@@ -186,17 +235,21 @@ export default function DashboardPage() {
     if (!deptRis) return [];
     const counts = { Critical: 0, High: 0, Medium: 0, Low: 0 };
     deptRis.forEach((r) => {
-      if (counts[r.severity] !== undefined) counts[r.severity]++;
+      if (!r.severity) return;
+      const key = r.severity.charAt(0).toUpperCase() + r.severity.slice(1).toLowerCase();
+      if (counts[key] !== undefined) counts[key]++;
     });
+    const totalCount = counts.Critical + counts.High + counts.Medium + counts.Low;
+    if (totalCount === 0) return [];
     return [
       { name: 'Critical', value: counts.Critical, color: '#ef4444' },
       { name: 'High', value: counts.High, color: '#f97316' },
       { name: 'Medium', value: counts.Medium, color: '#eab308' },
       { name: 'Low', value: counts.Low, color: '#22c55e' },
-    ].filter((d) => d.value > 0);
+    ];
   }, [deptRis]);
 
-  // Manager Chart 3: Line Chart Task Burn-down (last 30 days)
+  // Manager Chart 3: Line Chart Task Velocity (last 30 days)
   const lineData = useMemo(() => {
     if (!deptTasks) return [];
     const today = new Date();
@@ -214,7 +267,16 @@ export default function DashboardPage() {
 
       // Cumulative tasks closed up to this date
       const completed = deptTasks.filter((t) => {
-        if (t.status !== 'Open') {
+        if (t.status === 'Closed') {
+          const creationDate = new Date(t.created_at || Date.now());
+          return creationDate <= date;
+        }
+        return false;
+      }).length;
+
+      // Cumulative tasks in progress up to this date
+      const inProgress = deptTasks.filter((t) => {
+        if (t.status === 'In Progress') {
           const creationDate = new Date(t.created_at || Date.now());
           return creationDate <= date;
         }
@@ -225,6 +287,7 @@ export default function DashboardPage() {
         dateStr: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
         Created: created,
         Completed: completed,
+        'In Progress': inProgress,
       });
     }
     return data;
@@ -287,29 +350,6 @@ export default function DashboardPage() {
             {department?.name} Department, {organization?.name}
           </p>
         </div>
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          background: 'var(--bg-secondary)',
-          padding: '6px 12px',
-          borderRadius: '8px',
-          border: '1px solid var(--border-primary)',
-          fontSize: '13px',
-          fontWeight: 500
-        }}>
-          <span style={{ color: 'var(--text-secondary)' }}>Logged in as:</span>
-          <span style={{
-            color: user?.role === 'admin' ? 'var(--color-critical-text)' : 'var(--color-low-text)',
-            background: user?.role === 'admin' ? 'var(--color-critical-bg)' : 'var(--color-low-bg)',
-            padding: '2px 8px',
-            borderRadius: '4px',
-            fontSize: '11px',
-            fontWeight: 700
-          }}>
-            {user?.role === 'admin' ? 'Admin' : 'Employee'}
-          </span>
-        </div>
       </div>
 
       {/* ─────────────────────────────────────────────────────────────
@@ -317,47 +357,91 @@ export default function DashboardPage() {
           ───────────────────────────────────────────────────────────── */}
       {!userIsManager && (
         <>
-          {/* Member KPIs */}
-          <div className="kpi-grid" style={{ marginBottom: 32 }}>
-            <div className="glass-card kpi-card">
-              <div className="kpi-card-inner">
-                <div className="kpi-icon blue">📋</div>
-                <div className="kpi-content">
-                  <div className="kpi-value">{memberKPIs.open}</div>
-                  <div className="kpi-label">My Open Tasks</div>
+          {/* Smart Member KPIs */}
+          <div className="kpi-grid" style={{ marginBottom: 32, gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
+            <div className="glass-card kpi-card" style={{ padding: '24px' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 16 }}>
+                Task Completion Rate
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                <div style={{ position: 'relative', width: 64, height: 64 }}>
+                  <svg viewBox="0 0 36 36" style={{ width: '100%', height: '100%' }}>
+                    <path
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                      fill="none" stroke="var(--border-primary)" strokeWidth="3"
+                    />
+                    <path
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                      fill="none" stroke="var(--accent-primary)" strokeWidth="3"
+                      strokeDasharray={`${memberKPIs.completionRate}, 100`}
+                    />
+                  </svg>
+                  <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
+                    {memberKPIs.completionRate}%
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text-primary)' }}>
+                    {memberKPIs.closed} <span style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-secondary)' }}>/ {memberKPIs.total}</span>
+                  </div>
+                  <div style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>Completed vs Total Tasks</div>
                 </div>
               </div>
             </div>
 
-            <div className="glass-card kpi-card">
-              <div className="kpi-card-inner">
-                <div className="kpi-icon green">📅</div>
-                <div className="kpi-content">
-                  <div className="kpi-value">{memberKPIs.thisWeek}</div>
-                  <div className="kpi-label">Due This Week</div>
-                </div>
+            <div className={`glass-card kpi-card ${memberKPIs.overdue > 0 ? 'pulse-danger' : ''}`} style={{ padding: '24px' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 16 }}>
+                Next Actionable Task
               </div>
-            </div>
-
-            <div className={`glass-card kpi-card ${memberKPIs.overdue > 0 ? 'pulse-danger' : ''}`}>
-              <div className="kpi-card-inner">
-                <div className="kpi-icon red">⚠️</div>
-                <div className="kpi-content">
-                  <div className="kpi-value red">{memberKPIs.overdue}</div>
-                  <div className="kpi-label">My Overdue Tasks</div>
+              {sortedMyTasks.filter(t => t.status !== 'Closed').length > 0 ? (
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                    {sortedMyTasks.filter(t => t.status !== 'Closed')[0].task_description}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <PriorityBadge level={sortedMyTasks.filter(t => t.status !== 'Closed')[0].priority} />
+                    <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+                      Due {formatDate(sortedMyTasks.filter(t => t.status !== 'Closed')[0].due_date)}
+                    </span>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div style={{ fontSize: 14, color: 'var(--text-tertiary)' }}>No upcoming tasks. You are all caught up! 🎉</div>
+              )}
             </div>
           </div>
 
           {/* Member Tasks Table */}
-          <div className="section-header" style={{ marginBottom: 16 }}>
+          <div className="section-header" style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
             <span className="section-title">
               <span className="section-title-icon">📋</span>
               My Assigned Action Items
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)', marginLeft: 12, fontWeight: 500 }}>
+                ({myTasks.length} total)
+              </span>
             </span>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-              Total: {myTasks.length} tasks
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+              <select
+                value={groupBy}
+                onChange={(e) => setGroupBy(e.target.value)}
+                style={{ background: 'var(--bg-input)', border: '1px solid var(--border-primary)', padding: '6px 12px', borderRadius: '6px', fontSize: 13, color: 'var(--text-primary)', outline: 'none' }}
+              >
+                <option value="none">Group By: None</option>
+                <option value="category">Group By: Category</option>
+                <option value="meeting">Group By: Context (Meeting)</option>
+              </select>
+              
+              <select
+                value={sortMode}
+                onChange={(e) => setSortMode(e.target.value)}
+                style={{ background: 'var(--bg-input)', border: '1px solid var(--border-primary)', padding: '6px 12px', borderRadius: '6px', fontSize: 13, color: 'var(--text-primary)', outline: 'none' }}
+              >
+                <option value="smart">Sort: Smart (AI Urgency)</option>
+                <option value="priority-desc">Sort: Priority (Critical first)</option>
+                <option value="priority-asc">Sort: Priority (Low first)</option>
+                <option value="date-asc">Sort: Due Date (Asc)</option>
+                <option value="date-desc">Sort: Due Date (Desc)</option>
+              </select>
             </div>
           </div>
 
@@ -369,82 +453,111 @@ export default function DashboardPage() {
               style={{ marginBottom: 32 }}
             />
           ) : (
-            <div className="data-table-wrapper" style={{ marginBottom: 32 }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Task</th>
-                    <th>Meeting Source</th>
-                    <th
-                      onClick={() => setSortAsc(!sortAsc)}
-                      style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, userSelect: 'none' }}
-                    >
-                      Deadline {sortAsc ? '▲' : '▼'}
-                    </th>
-                    <th>Priority</th>
-                    <th>Status</th>
-                    <th style={{ textAlign: 'right' }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedMyTasks.map((t) => {
-                    const mtg = meetings?.find((m) => m.id === t.meeting_id);
-                    return (
-                      <tr key={t.id}>
-                        <td className="td-description">{t.task_description}</td>
-                        <td>
-                          {mtg ? (
-                            <Link href={`/meetings/${mtg.id}`} style={{ fontWeight: 500 }}>
-                              {mtg.title || mtg.file_name}
-                            </Link>
-                          ) : (
-                            '-'
-                          )}
-                        </td>
-                        <td className="td-date">{formatDate(t.due_date)}</td>
-                        <td>
-                          <PriorityBadge level={t.priority} />
-                        </td>
-                        <td>
-                          <StatusBadge status={t.status} />
-                        </td>
-                        <td style={{ textAlign: 'right' }}>
-                          {t.status === 'Open' ? (
-                            <button
-                              onClick={() => handleToggleComplete(t.id, t.status)}
-                              className="btn-complete"
-                            >
-                              ✓ Mark Complete
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => handleToggleComplete(t.id, t.status)}
-                              title="Click to reopen task"
-                              style={{
-                                background: 'rgba(34, 197, 94, 0.1)',
-                                color: '#22c55e',
-                                border: '1px solid rgba(34, 197, 94, 0.2)',
-                                cursor: 'pointer',
-                                padding: '6px 12px',
-                                borderRadius: '6px',
-                                fontSize: '12px',
-                                fontWeight: 500,
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '4px',
-                                transition: 'all 0.2s ease'
-                              }}
-                            >
-                              ✓ Completed
-                            </button>
-                          )}
-                        </td>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 32, marginBottom: 32 }}>
+              {Object.keys(groupedMyTasks).map((groupKey) => {
+                let icon = '📁';
+                if (groupBy === 'category') {
+                  if (groupKey.includes('Action')) icon = '📋';
+                  else if (groupKey.includes('Agreements') || groupKey.includes('Decision')) icon = '🤝';
+                  else if (groupKey.includes('Follow')) icon = '🔁';
+                  else if (groupKey.includes('Notes') || groupKey.includes('Info')) icon = 'ℹ️';
+                } else if (groupBy === 'meeting') {
+                  icon = '🎬';
+                }
+                return (
+                  <div key={groupKey} className="data-table-wrapper" style={{ border: '1px solid var(--border-primary)', boxShadow: 'var(--shadow-elevated)' }}>
+                    {groupBy !== 'none' && (
+                      <div style={{
+                        padding: '14px 20px',
+                        background: 'var(--bg-tertiary)',
+                        borderBottom: '1px solid var(--border-primary)',
+                        borderLeft: '4px solid var(--accent-primary)',
+                        fontWeight: 700,
+                        fontSize: '14px',
+                        color: 'var(--text-primary)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: '16px' }}>{icon}</span>
+                          <span>{groupKey}</span>
+                        </div>
+                        <span style={{
+                          background: 'var(--accent-primary-glow)',
+                          color: 'var(--text-accent)',
+                          padding: '3px 10px',
+                          borderRadius: '20px',
+                          fontSize: '11px',
+                          fontWeight: 700
+                        }}>
+                          {groupedMyTasks[groupKey].length} {groupedMyTasks[groupKey].length === 1 ? 'task' : 'tasks'}
+                        </span>
+                      </div>
+                    )}
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Task</th>
+                        <th>Meeting Source</th>
+                        <th>Deadline</th>
+                        <th>Priority</th>
+                        <th>Status</th>
+                        <th style={{ textAlign: 'right' }}>Actions</th>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                    </thead>
+                    <tbody>
+                      {groupedMyTasks[groupKey].map((t) => {
+                        const mtg = meetings?.find((m) => m.id === t.meeting_id);
+                        return (
+                          <tr key={t.id}>
+                            <td className="td-description">{t.task_description}</td>
+                            <td>
+                              {mtg ? (
+                                <Link href={`/meetings/${mtg.id}`} style={{ fontWeight: 500 }}>
+                                  {mtg.title || mtg.file_name}
+                                </Link>
+                              ) : (
+                                '-'
+                              )}
+                            </td>
+                            <td className="td-date">{formatDate(t.due_date)}</td>
+                            <td>
+                              <PriorityBadge level={t.priority} />
+                            </td>
+                            <td>
+                              <StatusBadge status={t.status} />
+                            </td>
+                            <td style={{ textAlign: 'right' }}>
+                              <select
+                                value={t.status}
+                                onChange={(e) => handleStatusChange(t.id, e.target.value)}
+                                style={{
+                                  background: t.status === 'Closed' ? 'rgba(34, 197, 94, 0.1)' : t.status === 'In Progress' ? 'hsla(45, 93%, 47%, 0.1)' : 'var(--bg-input)',
+                                  color: t.status === 'Closed' ? '#22c55e' : t.status === 'In Progress' ? 'hsl(45, 93%, 40%)' : 'var(--text-primary)',
+                                  border: `1px solid ${t.status === 'Closed' ? 'rgba(34, 197, 94, 0.2)' : t.status === 'In Progress' ? 'hsla(45, 93%, 47%, 0.2)' : 'var(--border-primary)'}`,
+                                  cursor: 'pointer',
+                                  padding: '6px 12px',
+                                  borderRadius: '6px',
+                                  fontSize: '12px',
+                                  fontWeight: 500,
+                                  outline: 'none',
+                                }}
+                              >
+                                <option value="Open">Open</option>
+                                <option value="In Progress">In Progress</option>
+                                <option value="Closed">Closed</option>
+                              </select>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })}
+          </div>
           )}
 
           {/* Recent Meetings Feed */}
@@ -564,7 +677,17 @@ export default function DashboardPage() {
                             <Cell key={`cell-${index}`} fill={entry.color} />
                           ))}
                         </Pie>
-                        <Tooltip formatter={(value) => [`${value} Risks`, 'Count']} />
+                        <Tooltip
+                          contentStyle={{
+                            background: 'var(--bg-secondary)',
+                            borderColor: 'var(--border-primary)',
+                            borderRadius: '8px',
+                            color: 'var(--text-primary)'
+                          }}
+                          itemStyle={{ color: 'var(--text-primary)' }}
+                          labelStyle={{ color: 'var(--text-secondary)', fontWeight: 600 }}
+                          formatter={(value) => [`${value} Risks`, 'Count']}
+                        />
                         <Legend verticalAlign="bottom" height={36} />
                       </PieChart>
                     </ResponsiveContainer>
@@ -581,7 +704,7 @@ export default function DashboardPage() {
               <div className="section-header" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: 12, marginBottom: 16 }}>
                 <span className="section-title">
                   <span className="section-title-icon">📈</span>
-                  Task Velocity (Last 30 Days)
+                  Task Velocity <span style={{ fontWeight: 400, fontSize: '13px', marginLeft: '6px', color: 'var(--text-secondary)' }}>(Last 30 days)</span>
                 </span>
               </div>
               <div style={{ flex: 1, minHeight: 0 }}>
@@ -596,9 +719,20 @@ export default function DashboardPage() {
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
                         <XAxis dataKey="dateStr" stroke="var(--text-tertiary)" fontSize={11} tickCount={6} />
                         <YAxis stroke="var(--text-tertiary)" fontSize={11} allowDecimals={false} axisLine={false} tickLine={false} />
-                        <Tooltip formatter={(value, name) => [`${value} Tasks`, name]} />
+                        <Tooltip
+                          contentStyle={{
+                            background: 'var(--bg-secondary)',
+                            borderColor: 'var(--border-primary)',
+                            borderRadius: '8px',
+                            color: 'var(--text-primary)'
+                          }}
+                          itemStyle={{ color: 'var(--text-primary)' }}
+                          labelStyle={{ color: 'var(--text-secondary)', fontWeight: 600 }}
+                          formatter={(value, name) => [`${value} Tasks`, name]}
+                        />
                         <Legend />
                         <Line type="monotone" dataKey="Created" stroke="hsl(250, 80%, 60%)" strokeWidth={2.5} dot={false} activeDot={{ r: 6 }} />
+                        <Line type="monotone" dataKey="In Progress" stroke="#f97316" strokeWidth={2.5} dot={false} />
                         <Line type="monotone" dataKey="Completed" stroke="#22c55e" strokeWidth={2.5} dot={false} />
                       </LineChart>
                     </ResponsiveContainer>
@@ -687,35 +821,25 @@ export default function DashboardPage() {
                           <StatusBadge status={t.status} />
                         </td>
                         <td style={{ textAlign: 'right' }}>
-                          {t.status === 'Open' ? (
-                            <button
-                              onClick={() => handleToggleComplete(t.id, t.status)}
-                              className="btn-complete"
-                            >
-                              ✓ Mark Complete
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => handleToggleComplete(t.id, t.status)}
-                              title="Click to reopen task"
-                              style={{
-                                background: 'rgba(34, 197, 94, 0.1)',
-                                color: '#22c55e',
-                                border: '1px solid rgba(34, 197, 94, 0.2)',
-                                cursor: 'pointer',
-                                padding: '6px 12px',
-                                borderRadius: '6px',
-                                fontSize: '12px',
-                                fontWeight: 500,
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '4px',
-                                transition: 'all 0.2s ease'
-                              }}
-                            >
-                              ✓ Completed
-                            </button>
-                          )}
+                          <select
+                            value={t.status}
+                            onChange={(e) => handleStatusChange(t.id, e.target.value)}
+                            style={{
+                              background: t.status === 'Closed' ? 'rgba(34, 197, 94, 0.1)' : t.status === 'In Progress' ? 'hsla(45, 93%, 47%, 0.1)' : 'var(--bg-input)',
+                              color: t.status === 'Closed' ? '#22c55e' : t.status === 'In Progress' ? 'hsl(45, 93%, 40%)' : 'var(--text-primary)',
+                              border: `1px solid ${t.status === 'Closed' ? 'rgba(34, 197, 94, 0.2)' : t.status === 'In Progress' ? 'hsla(45, 93%, 47%, 0.2)' : 'var(--border-primary)'}`,
+                              cursor: 'pointer',
+                              padding: '6px 12px',
+                              borderRadius: '6px',
+                              fontSize: '12px',
+                              fontWeight: 500,
+                              outline: 'none',
+                            }}
+                          >
+                            <option value="Open">Open</option>
+                            <option value="In Progress">In Progress</option>
+                            <option value="Closed">Closed</option>
+                          </select>
                         </td>
                       </tr>
                     );

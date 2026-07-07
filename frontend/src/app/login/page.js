@@ -35,7 +35,7 @@ export default function LoginPage() {
       width: '100vw',
       alignItems: 'center',
       justifyContent: 'center',
-      background: 'radial-gradient(circle at top right, hsl(220, 20%, 96%), hsl(220, 20%, 90%))',
+      background: 'var(--bg-login-gradient)',
       color: 'var(--text-primary)',
       padding: '20px',
       overflowY: 'auto'

@@ -7,6 +7,7 @@ import UploadModal from '@/components/UploadModal';
 import QueryWidget from '@/components/QueryWidget';
 import { ToastProvider, useToast } from '@/components/Toast';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
+import { ThemeProvider, useTheme } from '@/lib/ThemeContext';
 import { fetchMeetingStatus } from '@/lib/api';
 
 function LayoutWrapper({ children }) {
@@ -121,6 +122,10 @@ function LayoutWrapper({ children }) {
           </svg>
         </button>
         <span className="topbar-title">ActionCenter AI</span>
+        
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center' }}>
+          <ThemeToggle />
+        </div>
       </div>
 
       <main className={`main-content ${sidebarOpen ? 'sidebar-open' : ''}`} key={refreshKey}>
@@ -160,6 +165,31 @@ function LayoutWrapper({ children }) {
   );
 }
 
+function ThemeToggle() {
+  const { theme, toggleTheme } = useTheme();
+  return (
+    <button
+      onClick={toggleTheme}
+      style={{
+        background: 'var(--bg-secondary)',
+        border: '1px solid var(--border-primary)',
+        borderRadius: '20px',
+        padding: '6px 12px',
+        color: 'var(--text-primary)',
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        fontSize: '13px',
+        fontWeight: '500',
+        transition: 'all 0.2s ease',
+      }}
+    >
+      {theme === 'dark' ? '☀️ Light' : '🌙 Dark'}
+    </button>
+  );
+}
+
 export default function RootLayout({ children }) {
   return (
     <html lang="en" suppressHydrationWarning>
@@ -170,11 +200,13 @@ export default function RootLayout({ children }) {
         <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>" />
       </head>
       <body>
-        <ToastProvider>
-          <AuthProvider>
-            <LayoutWrapper>{children}</LayoutWrapper>
-          </AuthProvider>
-        </ToastProvider>
+        <ThemeProvider>
+          <ToastProvider>
+            <AuthProvider>
+              <LayoutWrapper>{children}</LayoutWrapper>
+            </AuthProvider>
+          </ToastProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

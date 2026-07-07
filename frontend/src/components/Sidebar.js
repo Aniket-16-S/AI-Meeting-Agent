@@ -113,36 +113,7 @@ export default function Sidebar({ isOpen, onToggle, onUpload }) {
           Upload Transcript
         </button>
 
-        {/* Department Switcher Dropdown */}
-        {userIsManager && departments.length > 0 && (
-          <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Active Department
-            </label>
-            <select
-              value={department?.id || ''}
-              onChange={(e) => switchDepartment(e.target.value)}
-              style={{
-                width: '100%',
-                background: 'var(--bg-input)',
-                border: '1px solid var(--border-primary)',
-                color: 'var(--text-primary)',
-                padding: '6px 10px',
-                borderRadius: '8px',
-                fontSize: '13px',
-                outline: 'none',
-                cursor: 'pointer',
-                fontWeight: 500
-              }}
-            >
-              {departments.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
+        {/* Department Switcher Dropdown Removed */}
 
         {/* Nav Links */}
         <nav className="sidebar-nav" style={{ flex: 1 }}>

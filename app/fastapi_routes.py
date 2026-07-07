@@ -236,7 +236,7 @@ async def get_tasks(
 
 class UpdateTaskStatusRequest(BaseModel):
     """Request body for the task-status PATCH endpoint."""
-    status: str = Field(..., pattern="^(Open|Closed)$", description="New status: 'Open' or 'Closed'")
+    status: str = Field(..., pattern="^(Open|Closed|In Progress)$", description="New status: 'Open', 'In Progress', or 'Closed'")
 
 
 @router.put("/tasks/{task_id}/status", summary="Update a task's Open/Closed status")
@@ -271,7 +271,7 @@ async def get_risks(
 @router.post("/query", summary="Ask a natural-language question about meeting data")
 async def query_agent(request: QueryRequest, organization_id: str = Query(...)):
     try:
-        result = await process_natural_language_query(request.question, organization_id)
+        result = await process_natural_language_query(request.question, organization_id, request.user_name)
         return result
     except Exception as exc:
         logger.error("Query agent failed: %s", exc, exc_info=True)

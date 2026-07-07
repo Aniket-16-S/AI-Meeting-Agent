@@ -32,19 +32,21 @@ export default function BacklogPage() {
   const [filterOwner, setFilterOwner] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
 
-  const handleToggleComplete = async (taskId, currentStatus) => {
-    const newStatus = currentStatus === 'Open' ? 'Closed' : 'Open';
+  const handleStatusChange = async (taskId, newStatus) => {
     try {
       await updateTaskStatus(taskId, newStatus);
       setTasks((prevTasks) =>
         prevTasks?.map((t) => (t.id === taskId ? { ...t, status: newStatus } : t))
       );
-      addToast(
-        newStatus === 'Closed'
-          ? 'Task marked as completed!'
-          : 'Task reopened!',
-        'success'
-      );
+      let msg = 'Task status updated!';
+      if (newStatus === 'Closed') {
+        msg = 'Task marked as completed!';
+      } else if (newStatus === 'In Progress') {
+        msg = 'Task marked as In Progress!';
+      } else if (newStatus === 'Open') {
+        msg = 'Task reopened!';
+      }
+      addToast(msg, 'success');
     } catch (err) {
       addToast(err.message || 'Failed to update task status', 'error');
     }
@@ -172,6 +174,7 @@ export default function BacklogPage() {
         >
           <option value="">All Statuses</option>
           <option value="Open">Open</option>
+          <option value="In Progress">In Progress</option>
           <option value="Closed">Closed</option>
         </select>
 
@@ -237,16 +240,25 @@ export default function BacklogPage() {
                       )}
                     </td>
                     <td style={{ textAlign: 'right' }}>
-                      {t.status === 'Open' ? (
-                        <button
-                          onClick={() => handleToggleComplete(t.id, t.status)}
-                          className="btn-complete"
-                        >
-                          ✓ Mark Complete
-                        </button>
-                      ) : (
-                        <span className="text-completed">✓ Completed</span>
-                      )}
+                      <select
+                        value={t.status}
+                        onChange={(e) => handleStatusChange(t.id, e.target.value)}
+                        style={{
+                          background: t.status === 'Closed' ? 'rgba(34, 197, 94, 0.1)' : t.status === 'In Progress' ? 'hsla(45, 93%, 47%, 0.1)' : 'var(--bg-input)',
+                          color: t.status === 'Closed' ? '#22c55e' : t.status === 'In Progress' ? 'hsl(45, 93%, 40%)' : 'var(--text-primary)',
+                          border: `1px solid ${t.status === 'Closed' ? 'rgba(34, 197, 94, 0.2)' : t.status === 'In Progress' ? 'hsla(45, 93%, 47%, 0.2)' : 'var(--border-primary)'}`,
+                          cursor: 'pointer',
+                          padding: '6px 12px',
+                          borderRadius: '6px',
+                          fontSize: '12px',
+                          fontWeight: 500,
+                          outline: 'none',
+                        }}
+                      >
+                        <option value="Open">Open</option>
+                        <option value="In Progress">In Progress</option>
+                        <option value="Closed">Closed</option>
+                      </select>
                     </td>
                   </tr>
                 );

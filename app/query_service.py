@@ -121,8 +121,19 @@ async def query_database(query: str) -> str:
 
 # ── System prompt builder ────────────────────────────────────────────────────
 
-def _build_system_prompt(organization_id: str) -> str:
+def _build_system_prompt(organization_id: str, user_name: str = None) -> str:
     now = datetime.now(tz=timezone.utc).astimezone()
+    if user_name:
+        first_name = user_name.split()[0] if user_name else ""
+        user_context = (
+            f"\n\nIMPORTANT CONTEXT: The user asking this query is named '{user_name}'. "
+            f"Note that transcripts and task owners often record only their first name '{first_name}'. "
+            f"If they ask for 'my tasks' or tasks assigned to them, ALWAYS filter where "
+            f"`owner ILIKE '%{user_name}%'` OR `owner ILIKE '%{first_name}%'` OR "
+            f"`CAST(owners_list AS TEXT) ILIKE '%{user_name}%'` OR `CAST(owners_list AS TEXT) ILIKE '%{first_name}%'`."
+        )
+    else:
+        user_context = ""
     return (
         "You are an AI meeting assistant with read-only access to a PostgreSQL database. "
         "Your goal is to answer the user's natural language questions by querying the "
@@ -131,7 +142,8 @@ def _build_system_prompt(organization_id: str) -> str:
         f"Current time: {now.strftime('%H:%M %Z')}.\n"
         f"You are strictly authorised to view data for organisation_id = '{organization_id}'. "
         f"EVERY SQL query you write MUST contain a filter: "
-        f"``organization_id = '{organization_id}'``.\n\n"
+        f"``organization_id = '{organization_id}'``."
+        f"{user_context}\n\n"
         "DATABASE SCHEMA:\n"
         "1. `organizations` — id (UUID PK), name (VARCHAR)\n"
         "2. `users` — id, organization_id (FK), f_name, l_name, email, role (user_role enum: 'admin'|'employee')\n"
@@ -162,7 +174,8 @@ def _build_system_prompt(organization_id: str) -> str:
         "Do NOT escape colons or use backslashes in the query string.\n"
         "- If results are empty or contain an error, explain clearly to the user.\n"
         "- Use current date context to resolve relative queries "
-        "('tasks due today' → due_date = current date, etc.)."
+        "('tasks due today' → due_date = current date, etc.).\n"
+        "- DO NOT include the 'organization_id', 'id', 'content_hash', or 'category' columns in your SELECT queries unless explicitly asked for."
     )
 
 
@@ -232,7 +245,7 @@ query_graph = _workflow.compile()
 
 # ── Public entry-point ───────────────────────────────────────────────────────
 
-async def process_natural_language_query(question: str, organization_id: str) -> dict:
+async def process_natural_language_query(question: str, organization_id: str, user_name: str = None) -> dict:
     """
     Process a natural language question using the LangGraph agent.
 
@@ -243,7 +256,7 @@ async def process_natural_language_query(question: str, organization_id: str) ->
     """
     token = _current_org_id.set(organization_id)
     try:
-        system_prompt = _build_system_prompt(organization_id)
+        system_prompt = _build_system_prompt(organization_id, user_name)
         initial_messages = [
             ("system", system_prompt),
             ("user", question),
