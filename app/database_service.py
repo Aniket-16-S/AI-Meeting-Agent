@@ -17,27 +17,33 @@ logger = logging.getLogger(__name__)
 # Database initialisation
 
 async def create_database_if_not_exists():
-    url = urlparse(DATABASE_URL)
-    db_name = url.path.lstrip("/")
+    try:
+        url = urlparse(DATABASE_URL)
+        db_name = url.path.lstrip("/")
 
-    # Validate db_name format
-    if not db_name.replace("_", "").replace("-", "").isalnum():
-        raise ValueError(f"Unexpected database name format: '{db_name}'")
+        # Validate db_name format
+        if not db_name.replace("_", "").replace("-", "").isalnum():
+            raise ValueError(f"Unexpected database name format: '{db_name}'")
 
-    base_url = DATABASE_URL.rsplit("/", 1)[0] + "/postgres"
-    temp_engine = create_async_engine(base_url, isolation_level="AUTOCOMMIT")
+        base_url = DATABASE_URL.rsplit("/", 1)[0] + "/postgres"
+        temp_engine = create_async_engine(base_url, isolation_level="AUTOCOMMIT")
 
-    async with temp_engine.connect() as conn:
-        result = await conn.execute(
-            text("SELECT 1 FROM pg_database WHERE datname = :name"),
-            {"name": db_name},
+        async with temp_engine.connect() as conn:
+            result = await conn.execute(
+                text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                {"name": db_name},
+            )
+            if not result.scalar():
+                logger.info(f"Database '{db_name}' does not exist. Creating it automatically…")
+                await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+                logger.info(f"Database '{db_name}' created successfully.")
+
+        await temp_engine.dispose()
+    except Exception as e:
+        logger.warning(
+            "Bypassed database creation check. This is normal on managed database "
+            "platforms like Render where the database is pre-created. Error: %s", e
         )
-        if not result.scalar():
-            logger.info(f"Database '{db_name}' does not exist. Creating it automatically…")
-            await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-            logger.info(f"Database '{db_name}' created successfully.")
-
-    await temp_engine.dispose()
 
 
 async def init_db():

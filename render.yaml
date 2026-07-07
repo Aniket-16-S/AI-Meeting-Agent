@@ -1,0 +1,65 @@
+services:
+  # 1. FastAPI Backend API
+  - type: web
+    name: meeting-agent-backend
+    env: docker
+    dockerfilePath: Dockerfile
+    dockerContext: .
+    plan: free # Can be upgraded as needed
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: meeting-agent-db
+          property: connectionString
+      - key: RABBITMQ_URL
+        sync: false # Set to CloudAMQP URL or internal RabbitMQ URL
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_V2
+        sync: false
+      - key: PORT
+        value: 8000
+
+  # 2. Next.js Frontend
+  - type: web
+    name: meeting-agent-frontend
+    env: docker
+    dockerfilePath: frontend/Dockerfile
+    dockerContext: frontend
+    plan: free
+    envVars:
+      - key: NEXT_PUBLIC_BACKEND_URL
+        fromStack:
+          type: web
+          name: meeting-agent-backend
+          property: host
+      - key: PORT
+        value: 3000
+
+  # 3. RabbitMQ Worker (Background Worker)
+  - type: worker
+    name: meeting-agent-worker
+    env: docker
+    dockerfilePath: Dockerfile
+    dockerContext: .
+    plan: free
+    # Override the default start command (which is uvicorn app.main:app) to start the worker instead
+    buildCommand: ""
+    startCommand: python -m app.worker
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: meeting-agent-db
+          property: connectionString
+      - key: RABBITMQ_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_V2
+        sync: false
+
+# 4. Managed PostgreSQL Database
+databases:
+  - name: meeting-agent-db
+    plan: free
+    postgresMajorVersion: 16
