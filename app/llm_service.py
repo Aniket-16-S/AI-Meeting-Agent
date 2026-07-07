@@ -8,6 +8,7 @@ from datetime import datetime, timezone, timedelta
 from typing import TypedDict, Optional
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from google.api_core.exceptions import ResourceExhausted, InvalidArgument, ServiceUnavailable
 from langgraph.graph import StateGraph, END
 from app.schema import MeetingExtractionResult, TaskSchema, RiskSchema
@@ -21,6 +22,19 @@ FALLBACK_MODELS = [
     "gemini-3.1-flash-lite",
     "gemini-3.1-pro",
     "gemini-3-flash",
+]
+
+GROQ_FALLBACK_MODELS = [
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile",
+    "groq/compound-mini",
+]
+
+GEMINI_FALLBACK_MODELS = [
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-pro",
 ]
 
 # Rough transcript size guard (characters). Most models support ~1M tokens;
@@ -491,6 +505,132 @@ async def _extract_with_fallbacks(system_prompt: str, transcript: str, api_key: 
     raise RuntimeError("Failed to extract data using any Gemini model.")
 
 
+# ── Groq Invocation and Fallback logic ───────────────────────────────────────
+
+async def _invoke_groq_with_backoff(
+    model_name: str,
+    api_key: str,
+    system_prompt: str,
+    transcript: str,
+) -> dict:
+    """
+    Attempts Groq LLM extraction for a single model with exponential backoff.
+    Raises the last exception if all retries are exhausted.
+    Retries only on transient errors (quota / 503 high-demand / 429).
+    Immediately re-raises on permanent errors (invalid argument, etc.).
+    """
+    llm = ChatGroq(
+        model=model_name,
+        api_key=api_key,
+        temperature=0,
+        max_retries=0,
+        model_kwargs={"response_format": {"type": "json_object"}},
+    )
+    schema_str = json.dumps(MeetingExtractionResult.model_json_schema(), indent=2)
+    messages = [
+        ("system", system_prompt + f"\n\nYou MUST return the response as a JSON object matching this JSON Schema:\n{schema_str}"),
+        ("user", f"Here is the transcript:\n\n{transcript}"),
+    ]
+
+    last_exc: Exception | None = None
+
+    for attempt in range(1, _MAX_RETRIES_PER_MODEL + 1):
+        try:
+            logger.info(f"[{model_name}] attempt {attempt}/{_MAX_RETRIES_PER_MODEL}")
+            response = await llm.ainvoke(messages)
+            
+            # Safe parse and validate (supports recovery if truncated)
+            result = safe_parse_and_validate(response.content)
+            
+            if not result.get("meeting_summary") and not result.get("tasks") and not result.get("risks"):
+                raise ValueError("LLM returned empty or completely malformed JSON structure.")
+
+            logger.info(f"[{model_name}] extraction succeeded on attempt {attempt}.")
+            return result
+
+        except Exception as e:
+            if is_transient_error(e):
+                last_exc = e
+                if attempt < _MAX_RETRIES_PER_MODEL:
+                    wait = _BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+                    jitter = wait * 0.2 * (2 * random.random() - 1)
+                    sleep_for = round(wait + jitter, 2)
+                    logger.warning(
+                        f"[{model_name}] transient error on attempt {attempt} "
+                        f"({type(e).__name__}). "
+                        f"Retrying in {sleep_for}s... | {e}"
+                    )
+                    await asyncio.sleep(sleep_for)
+                else:
+                    logger.warning(
+                        f"[{model_name}] exhausted {_MAX_RETRIES_PER_MODEL} retries "
+                        f"({type(e).__name__}). Moving to next model."
+                    )
+            else:
+                logger.error(
+                    f"[{model_name}] non-transient error on attempt {attempt}: "
+                    f"{type(e).__name__}: {e}. Skipping model."
+                )
+                raise
+
+    raise last_exc
+
+
+async def _extract_with_groq_and_gemini_fallbacks(
+    system_prompt: str,
+    transcript: str,
+    gemini_api_key: str,
+) -> dict:
+    """
+    Iterates through GROQ_FALLBACK_MODELS using GROQ_V2 API key.
+    If all Groq models fail, falls back to GEMINI_FALLBACK_MODELS using gemini_api_key.
+    Returns the first successful result or raises if all fail.
+    """
+    groq_api_key = os.getenv("GROQ_V2")
+    if groq_api_key:
+        groq_api_key = groq_api_key.strip()
+
+    last_exception: Exception | None = None
+
+    if groq_api_key:
+        for model_name in GROQ_FALLBACK_MODELS:
+            try:
+                logger.info(f"Trying Groq model: {model_name}")
+                return await _invoke_groq_with_backoff(
+                    model_name,
+                    groq_api_key,
+                    system_prompt,
+                    transcript,
+                )
+            except Exception as e:
+                last_exception = e
+                logger.warning(f"Groq model '{model_name}' failed. Trying next model... Error: {e}")
+                continue
+    else:
+        logger.warning("GROQ_V2 key not found in environment, skipping Groq models.")
+
+    logger.warning("All Groq models failed or skipped. Falling back to Gemini models...")
+
+    for model_name in GEMINI_FALLBACK_MODELS:
+        try:
+            logger.info(f"Trying Gemini fallback model: {model_name}")
+            return await _invoke_with_backoff(
+                model_name,
+                gemini_api_key,
+                system_prompt,
+                transcript,
+            )
+        except Exception as e:
+            last_exception = e
+            logger.warning(f"Gemini model '{model_name}' failed. Trying next model... Error: {e}")
+            continue
+
+    logger.error("All fallback models (Groq and Gemini) failed. No more options.")
+    if last_exception:
+        raise last_exception
+    raise RuntimeError("Failed to extract data using any Groq or Gemini model.")
+
+
 # ---------------------------------------------------------------------------
 # LangGraph integration
 # ---------------------------------------------------------------------------
@@ -504,18 +644,27 @@ class ExtractionState(TypedDict):
 
 
 async def _extraction_node(state: ExtractionState) -> ExtractionState:
-    """
-    Single LangGraph node that delegates to the existing _extract_with_fallbacks
-    function (which itself calls _invoke_with_backoff per model).
-    No retry/backoff logic lives here — it all stays in _extract_with_fallbacks.
-    """
-    logger.info("LangGraph: extraction node entered.")
-    result = await _extract_with_fallbacks(
+    # """
+    # Single LangGraph node that delegates to the existing _extract_with_fallbacks
+    # function (which itself calls _invoke_with_backoff per model).
+    # No retry/backoff logic lives here — it all stays in _extract_with_fallbacks.
+    # """
+    # logger.info("LangGraph: extraction node entered.")
+    # result = await _extract_with_fallbacks(
+    #     state["system_prompt"],
+    #     state["transcript"],
+    #     state["api_key"],
+    # )
+    # logger.info("LangGraph: extraction node completed successfully.")
+    # return {"result": result}
+
+    logger.info("LangGraph: Groq/Gemini fallback extraction node entered.")
+    result = await _extract_with_groq_and_gemini_fallbacks(
         state["system_prompt"],
         state["transcript"],
         state["api_key"],
     )
-    logger.info("LangGraph: extraction node completed successfully.")
+    logger.info("LangGraph: Groq/Gemini fallback extraction node completed successfully.")
     return {"result": result}
 
 
