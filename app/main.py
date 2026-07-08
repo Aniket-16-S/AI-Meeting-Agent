@@ -57,6 +57,14 @@ async def lifespan(app: FastAPI):
             "RabbitMQ pool initialisation failed at startup (will retry on use): %s", exc
         )
 
+    import os
+    if os.getenv("START_WORKER_IN_BACKEND", "false").lower() == "true":
+        import threading
+        from app.worker import main as worker_main
+        # Run worker consumer loop in a daemon thread so it runs concurrently with Uvicorn
+        threading.Thread(target=worker_main, name="EmbeddedWorkerThread", daemon=True).start()
+        logger.info("Embedded RabbitMQ background worker thread started.")
+
     yield
 
     # ── Cleanup ──────────────────────────────────────────────────────────────
