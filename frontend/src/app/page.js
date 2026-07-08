@@ -54,12 +54,17 @@ export default function DashboardPage() {
     setMounted(true);
   }, []);
 
-  // Sorting and Grouping for Member Tasks
+  const userIsManager = user?.role === 'admin';
+
+  // Sorting and Grouping for Tasks
   const [sortMode, setSortMode] = useState('smart'); // date-asc, date-desc, priority-desc, priority-asc, smart
   const [groupBy, setGroupBy] = useState('none'); // none, category, meeting
 
   // User Filter for Manager Backlog
   const [selectedUserFilter, setSelectedUserFilter] = useState('');
+
+  // Days range for task velocity chart (10, 15, or 30 days)
+  const [taskVelocityDays, setTaskVelocityDays] = useState(15);
 
   const handleStatusChange = async (taskId, newStatus) => {
     try {
@@ -140,7 +145,7 @@ export default function DashboardPage() {
   }, [tasks, user]);
 
   const sortedMyTasks = useMemo(() => {
-    let sorted = [...myTasks];
+    let sorted = [...myTasks].filter(t => t.status !== 'Closed');
     
     if (sortMode === 'smart') {
       const pWeights = { 'Critical': 1, 'High': 0.75, 'Medium': 0.5, 'Low': 0.25 };
@@ -230,15 +235,18 @@ export default function DashboardPage() {
     return { openTasks, closedTasks, criticalRisks, unassigned };
   }, [deptTasks, deptRis]);
 
-  // Manager Chart 1: Risk Severity Doughnut Chart
+  // Task Severity/Priority Breakdown Doughnut Chart data (counts tasks instead of risks, supports both views)
   const pieData = useMemo(() => {
-    if (!deptRis) return [];
+    const tasksSource = userIsManager ? deptTasks : myTasks;
+    if (!tasksSource) return [];
+    
     const counts = { Critical: 0, High: 0, Medium: 0, Low: 0 };
-    deptRis.forEach((r) => {
-      if (!r.severity) return;
-      const key = r.severity.charAt(0).toUpperCase() + r.severity.slice(1).toLowerCase();
+    tasksSource.forEach((t) => {
+      if (!t.priority) return;
+      const key = t.priority.charAt(0).toUpperCase() + t.priority.slice(1).toLowerCase();
       if (counts[key] !== undefined) counts[key]++;
     });
+    
     const totalCount = counts.Critical + counts.High + counts.Medium + counts.Low;
     if (totalCount === 0) return [];
     return [
@@ -247,15 +255,15 @@ export default function DashboardPage() {
       { name: 'Medium', value: counts.Medium, color: '#eab308' },
       { name: 'Low', value: counts.Low, color: '#22c55e' },
     ];
-  }, [deptRis]);
+  }, [deptTasks, myTasks, userIsManager]);
 
-  // Manager Chart 3: Line Chart Task Velocity (last 30 days)
+  // Manager Chart: Line Chart Task Velocity (configurable days, defaults to 15)
   const lineData = useMemo(() => {
     if (!deptTasks) return [];
     const today = new Date();
     const data = [];
 
-    for (let i = 29; i >= 0; i--) {
+    for (let i = taskVelocityDays - 1; i >= 0; i--) {
       const date = new Date(today);
       date.setDate(today.getDate() - i);
       date.setHours(23, 59, 59, 999);
@@ -291,7 +299,7 @@ export default function DashboardPage() {
       });
     }
     return data;
-  }, [deptTasks]);
+  }, [deptTasks, taskVelocityDays]);
 
   // Manager Table: Filtered Backlog
   const filteredBacklog = useMemo(() => {
@@ -326,6 +334,72 @@ export default function DashboardPage() {
     });
   }, [deptTasks, selectedUserFilter]);
 
+  // Sorting for Backlog
+  const sortedBacklog = useMemo(() => {
+    let sorted = [...filteredBacklog].filter(t => t.status !== 'Closed');
+    
+    if (sortMode === 'smart') {
+      const pWeights = { 'Critical': 1, 'High': 0.75, 'Medium': 0.5, 'Low': 0.25 };
+      sorted.sort((a, b) => {
+        const pA = pWeights[a.priority] || 0.25;
+        const pB = pWeights[b.priority] || 0.25;
+        
+        const hoursA = a.due_date ? (new Date(a.due_date) - new Date()) / (1000 * 60 * 60) : 9999;
+        const hoursB = b.due_date ? (new Date(b.due_date) - new Date()) / (1000 * 60 * 60) : 9999;
+        
+        const scoreA = (pA * 0.6) + ((1 / (Math.max(hoursA, 0) + 24)) * 0.4 * 100);
+        const scoreB = (pB * 0.6) + ((1 / (Math.max(hoursB, 0) + 24)) * 0.4 * 100);
+        
+        return scoreB - scoreA;
+      });
+    } else if (sortMode.startsWith('priority')) {
+      const pWeights = { 'Critical': 4, 'High': 3, 'Medium': 2, 'Low': 1 };
+      sorted.sort((a, b) => {
+        const pA = pWeights[a.priority] || 1;
+        const pB = pWeights[b.priority] || 1;
+        return sortMode === 'priority-desc' ? pB - pA : pA - pB;
+      });
+    } else {
+      sorted.sort((a, b) => {
+        const dateA = a.due_date ? new Date(a.due_date) : new Date('9999-12-31');
+        const dateB = b.due_date ? new Date(b.due_date) : new Date('9999-12-31');
+        return sortMode === 'date-asc' ? dateA - dateB : dateB - dateA;
+      });
+    }
+    return sorted;
+  }, [filteredBacklog, sortMode]);
+
+  // Grouping for Backlog
+  const groupedBacklog = useMemo(() => {
+    if (groupBy === 'none') return { 'All Tasks': sortedBacklog };
+    
+    const groups = {};
+    const catLabels = {
+      'Action Item': 'Action Items',
+      'Decision': 'Agreements & Policies',
+      'Follow-up': 'Follow-ups',
+      'Info': 'General Notes',
+    };
+    
+    sortedBacklog.forEach((t) => {
+      let key = 'Other';
+      if (groupBy === 'category') {
+        key = catLabels[t.category] || t.category || 'Other';
+      } else if (groupBy === 'meeting') {
+        const mtg = meetings?.find((m) => m.id === t.meeting_id);
+        key = mtg ? (mtg.title || mtg.file_name) : 'No Meeting Source';
+      }
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(t);
+    });
+    return groups;
+  }, [sortedBacklog, groupBy, meetings]);
+
+  // Top 8 next actionable tasks for admins
+  const next8ActionableTasks = useMemo(() => {
+    return sortedBacklog.filter(t => t.status !== 'Closed').slice(0, 8);
+  }, [sortedBacklog]);
+
   if (loading) {
     return (
       <div className="page-animate">
@@ -338,8 +412,6 @@ export default function DashboardPage() {
       </div>
     );
   }
-
-  const userIsManager = user?.role === 'admin';
 
   return (
     <div className="page-animate">
@@ -357,14 +429,15 @@ export default function DashboardPage() {
           ───────────────────────────────────────────────────────────── */}
       {!userIsManager && (
         <>
-          {/* Smart Member KPIs */}
-          <div className="kpi-grid" style={{ marginBottom: 32, gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
-            <div className="glass-card kpi-card" style={{ padding: '24px' }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 16 }}>
+          {/* Top Row: Task Completion Rate & Severity Breakdown */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 24, marginBottom: 32 }}>
+            {/* Task Completion Rate Card */}
+            <div className="glass-card" style={{ padding: '24px', display: 'flex', flexDirection: 'column', height: 360 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: '1px solid var(--border-subtle)', paddingBottom: 12, marginBottom: 20 }}>
                 Task Completion Rate
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                <div style={{ position: 'relative', width: 64, height: 64 }}>
+              <div style={{ display: 'flex', flex: 1, flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 24 }}>
+                <div style={{ position: 'relative', width: 110, height: 110 }}>
                   <svg viewBox="0 0 36 36" style={{ width: '100%', height: '100%' }}>
                     <path
                       d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
@@ -376,39 +449,131 @@ export default function DashboardPage() {
                       strokeDasharray={`${memberKPIs.completionRate}, 100`}
                     />
                   </svg>
-                  <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
+                  <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, fontWeight: 800, color: 'var(--text-primary)' }}>
                     {memberKPIs.completionRate}%
                   </div>
                 </div>
-                <div>
-                  <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text-primary)' }}>
-                    {memberKPIs.closed} <span style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-secondary)' }}>/ {memberKPIs.total}</span>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--text-primary)' }}>
+                    {memberKPIs.closed} <span style={{ fontSize: 16, fontWeight: 500, color: 'var(--text-secondary)' }}>/ {memberKPIs.total}</span>
                   </div>
-                  <div style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>Completed vs Total Tasks</div>
+                  <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginTop: 4 }}>Completed vs Total Tasks</div>
                 </div>
               </div>
             </div>
 
-            <div className={`glass-card kpi-card ${memberKPIs.overdue > 0 ? 'pulse-danger' : ''}`} style={{ padding: '24px' }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 16 }}>
-                Next Actionable Task
+            {/* Severity Breakdown Card */}
+            <div className="glass-card" style={{ padding: 24, display: 'flex', flexDirection: 'column', height: 360 }}>
+              <div className="section-header" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: 12, marginBottom: 16 }}>
+                <span className="section-title">
+                  <span className="section-title-icon">📊</span>
+                  My Tasks Severity Breakdown
+                </span>
               </div>
-              {sortedMyTasks.filter(t => t.status !== 'Closed').length > 0 ? (
-                <div>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                    {sortedMyTasks.filter(t => t.status !== 'Closed')[0].task_description}
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <PriorityBadge level={sortedMyTasks.filter(t => t.status !== 'Closed')[0].priority} />
-                    <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-                      Due {formatDate(sortedMyTasks.filter(t => t.status !== 'Closed')[0].due_date)}
-                    </span>
-                  </div>
-                </div>
-              ) : (
-                <div style={{ fontSize: 14, color: 'var(--text-tertiary)' }}>No upcoming tasks. You are all caught up! 🎉</div>
-              )}
+              <div style={{ flex: 1, minHeight: 0 }}>
+                {mounted && (
+                  pieData.length === 0 ? (
+                    <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-tertiary)', fontSize: 13 }}>
+                      No tasks assigned to you.
+                    </div>
+                  ) : (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={pieData}
+                          cx="50%"
+                          cy="45%"
+                          innerRadius={60}
+                          outerRadius={90}
+                          paddingAngle={5}
+                          dataKey="value"
+                        >
+                          {pieData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.color} />
+                          ))}
+                        </Pie>
+                        <Tooltip
+                          contentStyle={{
+                            background: 'var(--bg-secondary)',
+                            borderColor: 'var(--border-primary)',
+                            borderRadius: '8px',
+                            color: 'var(--text-primary)'
+                          }}
+                          itemStyle={{ color: 'var(--text-primary)' }}
+                          labelStyle={{ color: 'var(--text-secondary)', fontWeight: 600 }}
+                          formatter={(value) => [`${value} Tasks`, 'Count']}
+                        />
+                        <Legend verticalAlign="bottom" height={36} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  )
+                )}
+              </div>
             </div>
+          </div>
+
+          {/* Bottom Row: Top 4 Next Actionable Tasks */}
+          <div className="glass-card" style={{ padding: 24, display: 'flex', flexDirection: 'column', marginBottom: 32 }}>
+            <div className="section-header" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: 12, marginBottom: 20 }}>
+              <span className="section-title">
+                <span className="section-title-icon">🎯</span>
+                Next Actionable Tasks
+              </span>
+            </div>
+            {sortedMyTasks.filter(t => t.status !== 'Closed').length === 0 ? (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 120, color: 'var(--text-tertiary)', fontSize: 13 }}>
+                No upcoming actionable tasks. All caught up! 🎉
+              </div>
+            ) : (
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
+                gap: 20
+              }}>
+                {sortedMyTasks.filter(t => t.status !== 'Closed').slice(0, 4).map((t) => {
+                  const mtg = meetings?.find((m) => m.id === t.meeting_id);
+                  return (
+                    <div key={t.id} style={{
+                      padding: '16px',
+                      border: '1px solid var(--border-primary)',
+                      borderRadius: 12,
+                      background: 'var(--bg-tertiary)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 12,
+                      boxShadow: 'var(--shadow-card)',
+                      transition: 'transform 0.2s ease, box-shadow 0.2s ease'
+                    }}
+                    className="hover-card-effect"
+                    >
+                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1.5, flex: 1 }}>
+                        {t.task_description}
+                      </div>
+                      
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, borderTop: '1px solid var(--border-subtle)', paddingTop: 10 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11 }}>
+                          <span style={{ color: 'var(--text-tertiary)' }}>
+                            Due: {formatDate(t.due_date)}
+                          </span>
+                        </div>
+                        
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                            <PriorityBadge level={t.priority} />
+                            <StatusBadge status={t.status} />
+                          </div>
+                          {mtg && (
+                            <Link href={`/meetings/${mtg.id}`} style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-accent)' }}>
+                              Source ↗
+                            </Link>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Member Tasks Table */}
@@ -559,46 +724,6 @@ export default function DashboardPage() {
             })}
           </div>
           )}
-
-          {/* Recent Meetings Feed */}
-          <div className="section-header" style={{ marginBottom: 16 }}>
-            <span className="section-title">
-              <span className="section-title-icon">🎬</span>
-              Department Transcripts Feed
-            </span>
-          </div>
-
-          {deptMeetings.length === 0 ? (
-            <EmptyState
-              icon="📭"
-              title="No meetings uploaded yet"
-              text="Transcripts uploaded by team members in your department will appear here."
-            />
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              {deptMeetings.slice(0, 5).map((m) => (
-                <div key={m.id} className="glass-card" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Link href={`/meetings/${m.id}`} style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>
-                      {m.title || m.file_name}
-                    </Link>
-                    <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{formatDate(m.upload_date)}</span>
-                  </div>
-                  <p style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5, textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                    {m.summary || 'No summary extracted for this meeting transcript.'}
-                  </p>
-                  <div style={{ display: 'flex', gap: 12, marginTop: 4 }}>
-                    <span className="section-badge" style={{ fontSize: 11 }}>
-                      📋 Tasks: {deptTasks.filter((t) => t.meeting_id === m.id).length}
-                    </span>
-                    <span className="section-badge" style={{ fontSize: 11 }}>
-                      ⚠️ Risks: {deptRis.filter((r) => r.meeting_id === m.id).length}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
         </>
       )}
 
@@ -607,59 +732,21 @@ export default function DashboardPage() {
           ───────────────────────────────────────────────────────────── */}
       {userIsManager && (
         <>
-          {/* Manager KPIs */}
-          <div className="kpi-grid" style={{ marginBottom: 32 }}>
-            <div className="glass-card kpi-card">
-              <div className="kpi-card-inner">
-                <div className="kpi-icon blue">📋</div>
-                <div className="kpi-content">
-                  <div className="kpi-value" style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                    <span>{managerKPIs.openTasks}</span>
-                    <span style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-secondary)' }}>
-                      / {managerKPIs.openTasks + managerKPIs.closedTasks}
-                    </span>
-                  </div>
-                  <div className="kpi-label">Open vs Closed Tasks</div>
-                </div>
-              </div>
-            </div>
-
-            <div className={`glass-card kpi-card ${managerKPIs.criticalRisks > 0 ? 'pulse-danger' : ''}`}>
-              <div className="kpi-card-inner">
-                <div className="kpi-icon red">⚠️</div>
-                <div className="kpi-content">
-                  <div className="kpi-value red">{managerKPIs.criticalRisks}</div>
-                  <div className="kpi-label">Open Critical Risks</div>
-                </div>
-              </div>
-            </div>
-
-            <div className="glass-card kpi-card">
-              <div className="kpi-card-inner">
-                <div className="kpi-icon orange">👤</div>
-                <div className="kpi-content">
-                  <div className="kpi-value orange">{managerKPIs.unassigned}</div>
-                  <div className="kpi-label">Unassigned Tasks</div>
-                </div>
-              </div>
-            </div>
-          </div>
-
           {/* Visual Analytics */}
           <div className="charts-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 24, marginBottom: 32 }}>
-            {/* Risk Severity Breakdown Doughnut */}
+            {/* Task Severity Breakdown Doughnut */}
             <div className="glass-card" style={{ padding: 24, display: 'flex', flexDirection: 'column', height: 380 }}>
               <div className="section-header" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: 12, marginBottom: 16 }}>
                 <span className="section-title">
                   <span className="section-title-icon">📊</span>
-                  Risk Severity Breakdown
+                  Task Severity Breakdown
                 </span>
               </div>
               <div style={{ flex: 1, minHeight: 0 }}>
                 {mounted && (
                   pieData.length === 0 ? (
                     <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-tertiary)', fontSize: 13 }}>
-                      No risk items detected in department.
+                      No tasks detected in department.
                     </div>
                   ) : (
                     <ResponsiveContainer width="100%" height="100%">
@@ -686,7 +773,7 @@ export default function DashboardPage() {
                           }}
                           itemStyle={{ color: 'var(--text-primary)' }}
                           labelStyle={{ color: 'var(--text-secondary)', fontWeight: 600 }}
-                          formatter={(value) => [`${value} Risks`, 'Count']}
+                          formatter={(value) => [`${value} Tasks`, 'Count']}
                         />
                         <Legend verticalAlign="bottom" height={36} />
                       </PieChart>
@@ -696,22 +783,37 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            {/* Task Distribution Bar Chart */}
-
-
-            {/* Task Burn-down Line Chart */}
-            <div className="glass-card" style={{ padding: 24, display: 'flex', flexDirection: 'column', height: 380, gridColumn: 'span 1' }}>
-              <div className="section-header" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: 12, marginBottom: 16 }}>
+            {/* Task Velocity Line Chart */}
+            <div className="glass-card" style={{ padding: 24, display: 'flex', flexDirection: 'column', height: 380 }}>
+              <div className="section-header" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: 12, marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span className="section-title">
                   <span className="section-title-icon">📈</span>
-                  Task Velocity <span style={{ fontWeight: 400, fontSize: '13px', marginLeft: '6px', color: 'var(--text-secondary)' }}>(Last 30 days)</span>
+                  Task Velocity <span style={{ fontWeight: 400, fontSize: '13px', marginLeft: '6px', color: 'var(--text-secondary)' }}>(Last {taskVelocityDays} days)</span>
                 </span>
+                <select
+                  value={taskVelocityDays}
+                  onChange={(e) => setTaskVelocityDays(Number(e.target.value))}
+                  style={{
+                    background: 'var(--bg-secondary)',
+                    border: '1px solid var(--border-primary)',
+                    color: 'var(--text-primary)',
+                    borderRadius: '6px',
+                    padding: '4px 8px',
+                    fontSize: '12px',
+                    outline: 'none',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <option value={10}>Last 10 Days</option>
+                  <option value={15}>Last 15 Days</option>
+                  <option value={30}>Last 30 Days</option>
+                </select>
               </div>
               <div style={{ flex: 1, minHeight: 0 }}>
                 {mounted && (
                   deptTasks.length === 0 ? (
                     <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-tertiary)', fontSize: 13 }}>
-                      No tasks available to track burn-down.
+                      No tasks available to track velocity.
                     </div>
                   ) : (
                     <ResponsiveContainer width="100%" height="100%">
@@ -742,13 +844,105 @@ export default function DashboardPage() {
             </div>
           </div>
 
+          {/* Top 8 Next Actionable Tasks Card */}
+          <div className="glass-card" style={{ padding: 24, display: 'flex', flexDirection: 'column', marginBottom: 32 }}>
+            <div className="section-header" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: 12, marginBottom: 20 }}>
+              <span className="section-title">
+                <span className="section-title-icon">🎯</span>
+                Top 8 Next Actionable Tasks
+              </span>
+            </div>
+            {next8ActionableTasks.length === 0 ? (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 120, color: 'var(--text-tertiary)', fontSize: 13 }}>
+                No upcoming actionable tasks. All caught up! 🎉
+              </div>
+            ) : (
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+                gap: 20
+              }}>
+                {next8ActionableTasks.map((t) => {
+                  const mtg = meetings?.find((m) => m.id === t.meeting_id);
+                  return (
+                    <div key={t.id} style={{
+                      padding: '16px',
+                      border: '1px solid var(--border-primary)',
+                      borderRadius: 12,
+                      background: 'var(--bg-tertiary)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 12,
+                      boxShadow: 'var(--shadow-card)',
+                      transition: 'transform 0.2s ease, box-shadow 0.2s ease'
+                    }}
+                    className="hover-card-effect"
+                    >
+                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1.5, flex: 1 }}>
+                        {t.task_description}
+                      </div>
+                      
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, borderTop: '1px solid var(--border-subtle)', paddingTop: 10 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11 }}>
+                          <span style={{ color: 'var(--text-secondary)' }}>
+                            Owner: <strong>{t.owner}</strong>
+                          </span>
+                          <span style={{ color: 'var(--text-tertiary)' }}>
+                            Due: {formatDate(t.due_date)}
+                          </span>
+                        </div>
+                        
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                            <PriorityBadge level={t.priority} />
+                            <StatusBadge status={t.status} />
+                          </div>
+                          {mtg && (
+                            <Link href={`/meetings/${mtg.id}`} style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-accent)' }}>
+                              Source ↗
+                            </Link>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           {/* Team Backlog Table */}
           <div className="section-header" style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
             <span className="section-title">
               <span className="section-title-icon">📋</span>
               Team Backlog
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)', marginLeft: 12, fontWeight: 500 }}>
+                ({filteredBacklog.length} total)
+              </span>
             </span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+              <select
+                value={groupBy}
+                onChange={(e) => setGroupBy(e.target.value)}
+                style={{ background: 'var(--bg-input)', border: '1px solid var(--border-primary)', padding: '6px 12px', borderRadius: '6px', fontSize: 13, color: 'var(--text-primary)', outline: 'none' }}
+              >
+                <option value="none">Group By: None</option>
+                <option value="category">Group By: Category</option>
+                <option value="meeting">Group By: Context (Meeting)</option>
+              </select>
+              
+              <select
+                value={sortMode}
+                onChange={(e) => setSortMode(e.target.value)}
+                style={{ background: 'var(--bg-input)', border: '1px solid var(--border-primary)', padding: '6px 12px', borderRadius: '6px', fontSize: 13, color: 'var(--text-primary)', outline: 'none' }}
+              >
+                <option value="smart">Sort: Smart (AI Urgency)</option>
+                <option value="priority-desc">Sort: Priority (Critical first)</option>
+                <option value="priority-asc">Sort: Priority (Low first)</option>
+                <option value="date-asc">Sort: Due Date (Asc)</option>
+                <option value="date-desc">Sort: Due Date (Desc)</option>
+              </select>
+
               <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>Assignee:</label>
               <select
                 value={selectedUserFilter}
@@ -782,70 +976,114 @@ export default function DashboardPage() {
               text="No tasks match the active user filter."
             />
           ) : (
-            <div className="data-table-wrapper">
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Task Description</th>
-                    <th>Assigned To</th>
-                    <th>Meeting Source</th>
-                    <th>Due Date</th>
-                    <th>Priority</th>
-                    <th>Status</th>
-                    <th style={{ textAlign: 'right' }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredBacklog.map((t) => {
-                    const mtg = meetings?.find((m) => m.id === t.meeting_id);
-                    return (
-                      <tr key={t.id}>
-                        <td className="td-description">{t.task_description}</td>
-                        <td>
-                          <EntityResolutionBadge ownerName={t.owner} />
-                        </td>
-                        <td>
-                          {mtg ? (
-                            <Link href={`/meetings/${mtg.id}`} style={{ fontWeight: 500 }}>
-                              {mtg.title || mtg.file_name}
-                            </Link>
-                          ) : (
-                            '-'
-                          )}
-                        </td>
-                        <td className="td-date">{formatDate(t.due_date)}</td>
-                        <td>
-                          <PriorityBadge level={t.priority} />
-                        </td>
-                        <td>
-                          <StatusBadge status={t.status} />
-                        </td>
-                        <td style={{ textAlign: 'right' }}>
-                          <select
-                            value={t.status}
-                            onChange={(e) => handleStatusChange(t.id, e.target.value)}
-                            style={{
-                              background: t.status === 'Closed' ? 'rgba(34, 197, 94, 0.1)' : t.status === 'In Progress' ? 'hsla(45, 93%, 47%, 0.1)' : 'var(--bg-input)',
-                              color: t.status === 'Closed' ? '#22c55e' : t.status === 'In Progress' ? 'hsl(45, 93%, 40%)' : 'var(--text-primary)',
-                              border: `1px solid ${t.status === 'Closed' ? 'rgba(34, 197, 94, 0.2)' : t.status === 'In Progress' ? 'hsla(45, 93%, 47%, 0.2)' : 'var(--border-primary)'}`,
-                              cursor: 'pointer',
-                              padding: '6px 12px',
-                              borderRadius: '6px',
-                              fontSize: '12px',
-                              fontWeight: 500,
-                              outline: 'none',
-                            }}
-                          >
-                            <option value="Open">Open</option>
-                            <option value="In Progress">In Progress</option>
-                            <option value="Closed">Closed</option>
-                          </select>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 32, marginBottom: 32 }}>
+              {Object.keys(groupedBacklog).map((groupKey) => {
+                let icon = '📁';
+                if (groupBy === 'category') {
+                  if (groupKey.includes('Action')) icon = '📋';
+                  else if (groupKey.includes('Agreements') || groupKey.includes('Decision')) icon = '🤝';
+                  else if (groupKey.includes('Follow')) icon = '🔁';
+                  else if (groupKey.includes('Notes') || groupKey.includes('Info')) icon = 'ℹ️';
+                } else if (groupBy === 'meeting') {
+                  icon = '🎬';
+                }
+                return (
+                  <div key={groupKey} className="data-table-wrapper" style={{ border: '1px solid var(--border-primary)', boxShadow: 'var(--shadow-elevated)' }}>
+                    {groupBy !== 'none' && (
+                      <div style={{
+                        padding: '14px 20px',
+                        background: 'var(--bg-tertiary)',
+                        borderBottom: '1px solid var(--border-primary)',
+                        borderLeft: '4px solid var(--accent-primary)',
+                        fontWeight: 700,
+                        fontSize: '14px',
+                        color: 'var(--text-primary)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: '16px' }}>{icon}</span>
+                          <span>{groupKey}</span>
+                        </div>
+                        <span style={{
+                          background: 'var(--accent-primary-glow)',
+                          color: 'var(--text-accent)',
+                          padding: '3px 10px',
+                          borderRadius: '20px',
+                          fontSize: '11px',
+                          fontWeight: 700
+                        }}>
+                          {groupedBacklog[groupKey].length} {groupedBacklog[groupKey].length === 1 ? 'task' : 'tasks'}
+                        </span>
+                      </div>
+                    )}
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Task Description</th>
+                          <th>Assigned To</th>
+                          <th>Meeting Source</th>
+                          <th>Due Date</th>
+                          <th>Priority</th>
+                          <th>Status</th>
+                          <th style={{ textAlign: 'right' }}>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {groupedBacklog[groupKey].map((t) => {
+                          const mtg = meetings?.find((m) => m.id === t.meeting_id);
+                          return (
+                            <tr key={t.id}>
+                              <td className="td-description">{t.task_description}</td>
+                              <td>
+                                <EntityResolutionBadge ownerName={t.owner} />
+                              </td>
+                              <td>
+                                {mtg ? (
+                                  <Link href={`/meetings/${mtg.id}`} style={{ fontWeight: 500 }}>
+                                    {mtg.title || mtg.file_name}
+                                  </Link>
+                                ) : (
+                                  '-'
+                                )}
+                              </td>
+                              <td className="td-date">{formatDate(t.due_date)}</td>
+                              <td>
+                                <PriorityBadge level={t.priority} />
+                              </td>
+                              <td>
+                                <StatusBadge status={t.status} />
+                              </td>
+                              <td style={{ textAlign: 'right' }}>
+                                <select
+                                  value={t.status}
+                                  onChange={(e) => handleStatusChange(t.id, e.target.value)}
+                                  style={{
+                                    background: t.status === 'Closed' ? 'rgba(34, 197, 94, 0.1)' : t.status === 'In Progress' ? 'hsla(45, 93%, 47%, 0.1)' : 'var(--bg-input)',
+                                    color: t.status === 'Closed' ? '#22c55e' : t.status === 'In Progress' ? 'hsl(45, 93%, 40%)' : 'var(--text-primary)',
+                                    border: `1px solid ${t.status === 'Closed' ? 'rgba(34, 197, 94, 0.2)' : t.status === 'In Progress' ? 'hsla(45, 93%, 47%, 0.2)' : 'var(--border-primary)'}`,
+                                    cursor: 'pointer',
+                                    padding: '6px 12px',
+                                    borderRadius: '6px',
+                                    fontSize: '12px',
+                                    fontWeight: 500,
+                                    outline: 'none',
+                                  }}
+                                >
+                                  <option value="Open">Open</option>
+                                  <option value="In Progress">In Progress</option>
+                                  <option value="Closed">Closed</option>
+                                </select>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })}
             </div>
           )}
         </>

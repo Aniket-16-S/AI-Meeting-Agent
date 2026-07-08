@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════
-   ActionCenter AI — Design System
+   Action Center AI — Design System
    Premium Light Theme
    ═══════════════════════════════════════════════════════════════ */
 
@@ -20,19 +20,19 @@
   /* Borders */
   --border-primary: hsl(220, 15%, 88%);
   --border-subtle: hsl(220, 15%, 92%);
-  --border-glow: hsla(217, 91%, 60%, 0.35);
+  --border-glow: hsla(250, 91%, 60%, 0.35);
 
   /* Text */
   --text-primary: hsl(220, 25%, 14%);
   --text-secondary: hsl(220, 10%, 44%);
   --text-tertiary: hsl(220, 10%, 62%);
-  --text-accent: hsl(217, 91%, 50%);
+  --text-accent: hsl(250, 91%, 50%);
 
   /* Accent */
-  --accent-primary: hsl(217, 91%, 55%);
-  --accent-primary-hover: hsl(217, 91%, 48%);
-  --accent-primary-glow: hsla(217, 91%, 55%, 0.08);
-  --accent-gradient: linear-gradient(135deg, hsl(217, 91%, 55%), hsl(250, 80%, 60%));
+  --accent-primary: hsl(250, 91%, 55%);
+  --accent-primary-hover: hsl(250, 91%, 48%);
+  --accent-primary-glow: hsla(250, 91%, 55%, 0.08);
+  --accent-gradient: linear-gradient(135deg, hsl(250, 91%, 55%), hsl(250, 80%, 60%));
 
   /* Semantic Colors */
   --color-critical: hsl(0, 72%, 51%);
@@ -57,7 +57,7 @@
 
   --color-success: hsl(142, 60%, 38%);
   --color-warning: hsl(45, 93%, 40%);
-  --color-info: hsl(217, 91%, 55%);
+  --color-info: hsl(250, 91%, 55%);
 
   /* Spacing */
   --sidebar-width: 240px;
@@ -74,7 +74,7 @@
   /* Shadows */
   --shadow-card: 0 1px 3px hsla(220, 30%, 10%, 0.06), 0 1px 2px hsla(220, 30%, 10%, 0.04);
   --shadow-elevated: 0 8px 30px hsla(220, 30%, 10%, 0.12), 0 2px 8px hsla(220, 30%, 10%, 0.06);
-  --shadow-glow: 0 0 24px hsla(217, 91%, 55%, 0.1);
+  --shadow-glow: 0 0 24px hsla(250, 91%, 55%, 0.1);
   --bg-login-gradient: radial-gradient(circle at top right, hsl(220, 20%, 96%), hsl(220, 20%, 90%));
 }
 
@@ -93,18 +93,18 @@
   /* Borders */
   --border-primary: hsl(220, 9%, 22%);
   --border-subtle: hsl(220, 9%, 17%);
-  --border-glow: hsla(217, 91%, 60%, 0.35);
+  --border-glow: hsla(250, 91%, 60%, 0.35);
 
   /* Text */
   --text-primary: hsl(220, 15%, 96%);
   --text-secondary: hsl(220, 9%, 72%);
   --text-tertiary: hsl(220, 9%, 52%);
-  --text-accent: hsl(217, 91%, 68%);
+  --text-accent: hsl(250, 91%, 68%);
 
   /* Shadows */
   --shadow-card: 0 4px 12px rgba(0, 0, 0, 0.4), 0 2px 4px rgba(0, 0, 0, 0.3);
   --shadow-elevated: 0 12px 36px rgba(0, 0, 0, 0.65), 0 4px 12px rgba(0, 0, 0, 0.4);
-  --shadow-glow: 0 0 20px hsla(217, 91%, 55%, 0.25);
+  --shadow-glow: 0 0 20px hsla(250, 91%, 55%, 0.25);
 }
 
 /* ── Reset & Base ───────────────────────────────────────────── */
@@ -162,11 +162,7 @@ button {
   transition: margin-left var(--transition-base);
 }
 
-@media (min-width: 769px) {
-  .main-content.sidebar-open {
-    margin-left: var(--sidebar-width);
-  }
-}
+/* Removed margin-left shift for sidebar-open on desktop to keep background stable */
 
 /* ── Badges ─────────────────────────────────────────────────── */
 .status-badge, .priority-badge {
@@ -280,12 +276,12 @@ button {
   font-size: 13px;
   font-weight: 600;
   transition: all var(--transition-fast);
-  box-shadow: 0 2px 10px hsla(217, 91%, 55%, 0.22);
+  box-shadow: 0 2px 10px hsla(250, 91%, 55%, 0.22);
   white-space: nowrap;
 }
 .sidebar-upload-btn:hover {
   transform: translateY(-1px);
-  box-shadow: 0 4px 18px hsla(217, 91%, 55%, 0.3);
+  box-shadow: 0 4px 18px hsla(250, 91%, 55%, 0.3);
 }
 .sidebar-upload-btn svg {
   flex-shrink: 0;
@@ -452,7 +448,7 @@ button {
   font-size: 20px;
   flex-shrink: 0;
 }
-.kpi-icon.blue { background: hsla(217, 91%, 55%, 0.1); }
+.kpi-icon.blue { background: hsla(250, 91%, 55%, 0.1); }
 .kpi-icon.green { background: hsla(142, 60%, 38%, 0.1); }
 .kpi-icon.red { background: var(--color-critical-bg); }
 .kpi-icon.orange { background: var(--color-high-bg); }
@@ -628,9 +624,9 @@ button {
   white-space: nowrap;
 }
 .status-badge.open {
-  background: hsla(217, 91%, 55%, 0.08);
-  color: hsl(217, 91%, 48%);
-  border: 1px solid hsla(217, 91%, 55%, 0.2);
+  background: hsla(250, 91%, 55%, 0.08);
+  color: hsl(250, 91%, 48%);
+  border: 1px solid hsla(250, 91%, 55%, 0.2);
 }
 .status-badge.closed {
   background: hsla(142, 60%, 38%, 0.08);
@@ -900,7 +896,7 @@ button {
   white-space: nowrap;
 }
 .upload-file-status.processing {
-  background: hsla(217, 91%, 55%, 0.1);
+  background: hsla(250, 91%, 55%, 0.1);
   color: var(--accent-primary);
 }
 .upload-file-status.success {
@@ -933,7 +929,7 @@ button {
 }
 .upload-submit-btn:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 4px 18px hsla(217, 91%, 55%, 0.3);
+  box-shadow: 0 4px 18px hsla(250, 91%, 55%, 0.3);
 }
 .upload-submit-btn:disabled {
   opacity: 0.5;
@@ -996,7 +992,7 @@ button {
   align-items: center;
   justify-content: center;
   font-size: 22px;
-  box-shadow: 0 4px 20px hsla(217, 91%, 55%, 0.3), inset 0 1px 1px rgba(255, 255, 255, 0.35);
+  box-shadow: 0 4px 20px hsla(250, 91%, 55%, 0.3), inset 0 1px 1px rgba(255, 255, 255, 0.35);
   border: 1.5px solid rgba(255, 255, 255, 0.3);
   z-index: 150;
   transition: all var(--transition-base);
@@ -1004,7 +1000,7 @@ button {
 }
 .query-fab:hover {
   transform: translateY(-2px) scale(1.05);
-  box-shadow: 0 8px 28px hsla(217, 91%, 55%, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.45);
+  box-shadow: 0 8px 28px hsla(250, 91%, 55%, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.45);
   border-color: rgba(255, 255, 255, 0.5);
 }
 .query-fab.hidden {
@@ -1435,7 +1431,7 @@ button {
   margin-top: 12px;
   padding: 14px 16px;
   background: var(--accent-primary-glow);
-  border: 1px solid hsla(217, 91%, 55%, 0.12);
+  border: 1px solid hsla(250, 91%, 55%, 0.12);
   border-radius: 10px;
   font-size: 13px;
   line-height: 1.6;

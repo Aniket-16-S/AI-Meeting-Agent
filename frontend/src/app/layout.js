@@ -121,7 +121,7 @@ function LayoutWrapper({ children }) {
             <line x1="3" y1="18" x2="21" y2="18" />
           </svg>
         </button>
-        <span className="topbar-title">ActionCenter AI</span>
+        <span className="topbar-title">Action Center AI</span>
         
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center' }}>
           <ThemeToggle />
@@ -136,7 +136,7 @@ function LayoutWrapper({ children }) {
       {activeProcessingCount > 0 && (
         <div className="processing-floating-panel">
           <div className="processing-panel-header">
-            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#ff4d4f', marginRight: 8 }} />
+            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#22c55e', marginRight: 8, animation: 'pulse-dot 1.5s infinite' }} />
             <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)' }}>AI Processing ({activeProcessingCount})</span>
           </div>
           <div className="processing-panel-body">
@@ -194,7 +194,7 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <title>ActionCenter AI, Project Command Center</title>
+        <title>Action Center AI, Project Command Center</title>
         <meta name="description" content="AI-powered meeting transcript analyzer. Extract tasks, risks, and insights automatically." />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>" />

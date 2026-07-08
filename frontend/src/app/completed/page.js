@@ -19,7 +19,7 @@ function formatDate(d) {
   } catch { return '-'; }
 }
 
-export default function BacklogPage() {
+export default function CompletedTasksPage() {
   const { user, department, getDepartmentMeetingIds, organization } = useAuth();
   const { addToast } = useToast();
   const [tasks, setTasks] = useState(null);
@@ -30,7 +30,6 @@ export default function BacklogPage() {
   const [filterPriority, setFilterPriority] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
   const [filterOwner, setFilterOwner] = useState('');
-  const [filterStatus, setFilterStatus] = useState('');
   const [filterMeeting, setFilterMeeting] = useState('');
 
   const handleStatusChange = async (taskId, newStatus) => {
@@ -67,7 +66,7 @@ export default function BacklogPage() {
       .finally(() => setLoading(false));
   }, [organization?.id]);
 
-  // Filter tasks belonging to active department or assigned to the user
+  // Filter tasks belonging to active department or assigned to the user, showing only Closed tasks
   const filteredDeptTasks = useMemo(() => {
     if (!tasks || !department || !user) return [];
     const deptMtgIds = getDepartmentMeetingIds(department.id);
@@ -76,6 +75,9 @@ export default function BacklogPage() {
     const userFirstName = user.name.trim().split(/\s+/)[0].toLowerCase();
 
     return tasks.filter((t) => {
+      // Must be closed/completed
+      if (t.status !== 'Closed') return false;
+
       const isInDept = deptMtgIds.includes(t.meeting_id);
       
       let isAssignedToMe = false;
@@ -110,7 +112,6 @@ export default function BacklogPage() {
     return filteredDeptTasks.filter((t) => {
       if (filterPriority && t.priority !== filterPriority) return false;
       if (filterCategory && t.category !== filterCategory) return false;
-      if (filterStatus && t.status !== filterStatus) return false;
       if (filterMeeting && t.meeting_id !== filterMeeting) return false;
       if (filterOwner) {
         const queryLower = filterOwner.toLowerCase();
@@ -127,13 +128,13 @@ export default function BacklogPage() {
       }
       return true;
     });
-  }, [filteredDeptTasks, filterPriority, filterCategory, filterOwner, filterStatus, filterMeeting]);
+  }, [filteredDeptTasks, filterPriority, filterCategory, filterOwner, filterMeeting]);
 
   if (loading) {
     return (
       <div className="page-animate">
         <div className="page-header">
-          <h1 className="page-title">Global Backlog</h1>
+          <h1 className="page-title">Completed Tasks</h1>
         </div>
         <SkeletonTable rows={8} cols={6} />
       </div>
@@ -143,9 +144,9 @@ export default function BacklogPage() {
   return (
     <div className="page-animate">
       <div className="page-header">
-        <h1 className="page-title">Global Backlog</h1>
+        <h1 className="page-title">Completed Tasks</h1>
         <p className="page-subtitle">
-          {filtered.length} of {filteredDeptTasks.length} tasks in {department?.name}
+          {filtered.length} of {filteredDeptTasks.length} completed tasks in {department?.name}
         </p>
       </div>
 
@@ -177,17 +178,6 @@ export default function BacklogPage() {
 
         <select
           className="filter-select"
-          value={filterStatus}
-          onChange={(e) => setFilterStatus(e.target.value)}
-        >
-          <option value="">All Statuses</option>
-          <option value="Open">Open</option>
-          <option value="In Progress">In Progress</option>
-          <option value="Closed">Closed</option>
-        </select>
-
-        <select
-          className="filter-select"
           value={filterMeeting}
           onChange={(e) => setFilterMeeting(e.target.value)}
           style={{ maxWidth: '200px', textOverflow: 'ellipsis' }}
@@ -211,9 +201,9 @@ export default function BacklogPage() {
 
       {filtered.length === 0 ? (
         <EmptyState
-          icon="🔍"
-          title="No tasks match your filters"
-          text={filteredDeptTasks.length ? 'Try adjusting your filters to see more results.' : 'Upload a meeting transcript in this department to populate the backlog.'}
+          icon="✅"
+          title="No completed tasks match your filters"
+          text={filteredDeptTasks.length ? 'Try adjusting your filters to see more results.' : 'No completed tasks found in this department. Work on active tasks on the Dashboard or Backlog!'}
         />
       ) : (
         <div className="data-table-wrapper">

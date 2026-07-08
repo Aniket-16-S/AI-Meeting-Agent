@@ -660,3 +660,117 @@ async def update_user_department_route(user_id: str, payload: UpdateUserDepartme
                 {"tid": uuid.UUID(payload.department_id), "uid": uuid.UUID(user_id)},
             )
     return {"status": "success"}
+
+
+class DeleteRequest(BaseModel):
+    admin_email: str
+    password: str
+
+
+@router.delete("/users/{user_id}", summary="Delete an employee user")
+async def delete_user_route(user_id: str, payload: DeleteRequest):
+    admin_email = payload.admin_email
+    password = payload.password
+
+    async with async_session_factory() as session:
+        # 1. Fetch admin user
+        res_admin = await session.execute(
+            text(
+                "SELECT id, password_hash, role, organization_id "
+                "FROM users WHERE email = :email"
+            ),
+            {"email": admin_email},
+        )
+        admin = res_admin.mappings().first()
+        if not admin or admin["role"] != "admin":
+            raise HTTPException(status_code=403, detail="Unauthorized: Only admins can delete users")
+
+        # Verify password
+        try:
+            valid = bcrypt.checkpw(
+                password.encode("utf-8"),
+                admin["password_hash"].encode("utf-8"),
+            )
+        except ValueError:
+            valid = admin["password_hash"] == password
+
+        if not valid:
+            raise HTTPException(status_code=400, detail="Invalid admin password")
+
+        # 2. Check target user
+        user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+        res_user = await session.execute(
+            text("SELECT organization_id FROM users WHERE id = :id"),
+            {"id": user_uuid},
+        )
+        target_user = res_user.mappings().first()
+        if not target_user:
+            raise HTTPException(status_code=404, detail="User not found")
+        if target_user["organization_id"] != admin["organization_id"]:
+            raise HTTPException(status_code=403, detail="Unauthorized to delete users in other organizations")
+
+        # 3. Handle ON DELETE RESTRICT on meetings (re-assign uploaded meetings to admin)
+        await session.execute(
+            text("UPDATE meetings SET uploaded_by = :admin_id WHERE uploaded_by = :user_id"),
+            {"admin_id": admin["id"], "user_id": user_uuid},
+        )
+        # Delete user
+        await session.execute(
+            text("DELETE FROM users WHERE id = :id"),
+            {"id": user_uuid},
+        )
+        await session.commit()
+
+    return {"status": "success"}
+
+
+@router.delete("/departments/{dept_id}", summary="Delete a department")
+async def delete_department_route(dept_id: str, payload: DeleteRequest):
+    admin_email = payload.admin_email
+    password = payload.password
+
+    async with async_session_factory() as session:
+        # 1. Fetch admin user
+        res_admin = await session.execute(
+            text(
+                "SELECT password_hash, role, organization_id "
+                "FROM users WHERE email = :email"
+            ),
+            {"email": admin_email},
+        )
+        admin = res_admin.mappings().first()
+        if not admin or admin["role"] != "admin":
+            raise HTTPException(status_code=403, detail="Unauthorized: Only admins can delete departments")
+
+        # Verify password
+        try:
+            valid = bcrypt.checkpw(
+                password.encode("utf-8"),
+                admin["password_hash"].encode("utf-8"),
+            )
+        except ValueError:
+            valid = admin["password_hash"] == password
+
+        if not valid:
+            raise HTTPException(status_code=400, detail="Invalid admin password")
+
+        # 2. Check target department (team)
+        dept_uuid = uuid.UUID(dept_id) if isinstance(dept_id, str) else dept_id
+        res_dept = await session.execute(
+            text("SELECT organization_id FROM teams WHERE id = :id"),
+            {"id": dept_uuid},
+        )
+        target_dept = res_dept.mappings().first()
+        if not target_dept:
+            raise HTTPException(status_code=404, detail="Department not found")
+        if target_dept["organization_id"] != admin["organization_id"]:
+            raise HTTPException(status_code=403, detail="Unauthorized to delete departments in other organizations")
+
+        # 3. Delete department
+        await session.execute(
+            text("DELETE FROM teams WHERE id = :id"),
+            {"id": dept_uuid},
+        )
+        await session.commit()
+
+    return {"status": "success"}

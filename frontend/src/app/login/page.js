@@ -55,14 +55,14 @@ export default function LoginPage() {
             width: '48px',
             height: '48px',
             borderRadius: '14px',
-            background: 'linear-gradient(135deg, hsl(217, 91%, 55%), hsl(250, 80%, 60%))',
+            background: 'linear-gradient(135deg, hsl(250, 91%, 55%), hsl(280, 80%, 60%))',
             alignItems: 'center',
             justifyContent: 'center',
             fontSize: '24px',
             boxShadow: 'var(--shadow-glow)',
             marginBottom: '12px'
           }}>⚡</div>
-          <h1 style={{ fontSize: '26px', fontWeight: 800, tracking: '-0.025em', margin: 0 }}>ActionCenter AI</h1>
+          <h1 style={{ fontSize: '26px', fontWeight: 800, tracking: '-0.025em', margin: 0 }}>Action Center AI</h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '6px' }}>B2B Enterprise Portal</p>
         </div>
 
@@ -130,7 +130,7 @@ export default function LoginPage() {
                 fontSize: '14px',
                 cursor: 'pointer',
                 textAlign: 'center',
-                boxShadow: '0 4px 12px hsla(217, 91%, 55%, 0.15)',
+                boxShadow: '0 4px 12px hsla(250, 91%, 55%, 0.15)',
                 marginTop: '6px',
                 transition: 'opacity 0.2s'
               }}
@@ -140,7 +140,7 @@ export default function LoginPage() {
           </form>
 
           <div style={{ textAlign: 'center', marginTop: '20px', fontSize: '13px', color: 'var(--text-secondary)' }}>
-            New to ActionCenter?{' '}
+            New to Action Center?{' '}
             <Link href="/register" style={{ color: 'var(--text-accent)', fontWeight: 600 }}>
               Register Organization
             </Link>

@@ -128,13 +128,14 @@ export default function MeetingsPage() {
                 <th>Tasks</th>
                 <th>Risks</th>
                 <th>Summary</th>
+                <th style={{ textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {filteredMeetings.map((m) => (
                 <tr key={m.id} className="clickable-row">
-                  <td>
-                    <Link href={`/meetings/${m.id}`} style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
+                  <td style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <Link href={`/meetings/${m.id}`} style={{ color: 'var(--text-primary)', fontWeight: 500, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={m.title || m.file_name}>
                       {m.title || m.file_name}
                     </Link>
                   </td>
@@ -145,14 +146,33 @@ export default function MeetingsPage() {
                   <td>
                     <span className="section-badge">{riskCounts[m.id] || 0}</span>
                   </td>
-                  <td className="td-description" style={{ maxWidth: 300 }}>
+                  <td className="td-description" style={{ maxWidth: 305 }}>
                     <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                       {m.summary
-                        ? m.summary.length > 100
-                          ? m.summary.slice(0, 100) + '…'
+                        ? m.summary.length > 90
+                          ? m.summary.slice(0, 90) + '…'
                           : m.summary
                         : '-'}
                     </span>
+                  </td>
+                  <td style={{ textAlign: 'right' }}>
+                    <Link
+                      href={`/meetings/${m.id}`}
+                      style={{
+                        display: 'inline-block',
+                        background: 'var(--accent-primary-glow)',
+                        color: 'var(--text-accent)',
+                        border: '1px solid var(--border-primary)',
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        textDecoration: 'none',
+                        transition: 'all 0.2s ease',
+                      }}
+                    >
+                      View Details ↗
+                    </Link>
                   </td>
                 </tr>
               ))}
