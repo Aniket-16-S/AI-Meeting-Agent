@@ -60,9 +60,11 @@ async def lifespan(app: FastAPI):
     import os
     if os.getenv("START_WORKER_IN_BACKEND", "false").lower() == "true":
         import threading
-        from app.worker import main as worker_main
+        import app.worker
+        # Set the main event loop reference in the worker module
+        app.worker.main_loop = loop
         # Run worker consumer loop in a daemon thread so it runs concurrently with Uvicorn
-        threading.Thread(target=worker_main, name="EmbeddedWorkerThread", daemon=True).start()
+        threading.Thread(target=app.worker.main, name="EmbeddedWorkerThread", daemon=True).start()
         logger.info("Embedded RabbitMQ background worker thread started.")
 
     yield
