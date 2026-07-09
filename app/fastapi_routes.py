@@ -25,7 +25,8 @@ from typing import List, Optional
 
 import bcrypt
 from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile, status
-from pydantic import BaseModel, Field
+from fastapi.responses import RedirectResponse, HTMLResponse
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
@@ -40,7 +41,21 @@ from app.database_service import (
     get_meeting_id_by_hash,
     save_meeting,
     update_task_status,
+    get_user_google_status,
+    get_user_google_refresh_token,
+    update_user_google_connection,
+    save_google_meeting,
+    get_google_meeting_by_id,
+    update_google_meeting_status,
+    get_active_google_meetings,
 )
+from app.google_calendar_service import GoogleCalendarService, CLIENT_ID as GOOGLE_CLIENT_ID
+from google.oauth2 import id_token
+from google.auth.transport import requests as auth_requests
+import os
+import zoneinfo
+import re
+import datetime
 from app.llm_service import extract_meeting_data
 from app.query_service import process_natural_language_query
 from app.schema import QueryRequest
@@ -774,3 +789,259 @@ async def delete_department_route(dept_id: str, payload: DeleteRequest):
         await session.commit()
 
     return {"status": "success"}
+
+
+# ── Google Meet Integration Endpoints ─────────────────────────────────────────
+
+class CreateGoogleMeetingRequest(BaseModel):
+    title: str = Field(..., description="Meeting title")
+    description: Optional[str] = Field(None, description="Meeting description")
+    start: str = Field(..., description="ISO 8601 start time")
+    end: str = Field(..., description="ISO 8601 end time")
+    timezone: str = Field(..., description="IANA timezone name")
+    attendees: List[str] = Field(..., description="List of attendee email addresses")
+
+    @model_validator(mode="after")
+    def validate_inputs(self):
+        try:
+            zoneinfo.ZoneInfo(self.timezone)
+        except Exception:
+            raise ValueError("Invalid timezone database identifier")
+
+        try:
+            start_dt = datetime.datetime.fromisoformat(self.start)
+        except Exception:
+            raise ValueError("Invalid start date/time format. Use ISO 8601")
+        try:
+            end_dt = datetime.datetime.fromisoformat(self.end)
+        except Exception:
+            raise ValueError("Invalid end date/time format. Use ISO 8601")
+
+        if end_dt <= start_dt:
+            raise ValueError("End date/time must be strictly after start date/time")
+
+        if not self.attendees:
+            raise ValueError("At least one attendee is required")
+
+        email_regex = r"^[^@]+@[^@]+\.[^@]+$"
+        cleaned_emails = []
+        for email in self.attendees:
+            email = email.strip()
+            if not email:
+                continue
+            if not re.match(email_regex, email):
+                raise ValueError(f"Invalid email address: {email}")
+            cleaned_emails.append(email)
+
+        unique_emails = list(dict.fromkeys(cleaned_emails))
+        if len(unique_emails) < 1:
+            raise ValueError("At least one valid unique attendee is required")
+
+        self.attendees = unique_emails
+        return self
+
+
+@router.get("/auth/google/login", summary="Start Google OAuth Connect flow")
+async def google_login(user_id: str = Query(...)):
+    status_dict = await get_user_google_status(user_id)
+    if status_dict.get("connected"):
+        return RedirectResponse("http://localhost:3000/")
+
+    auth_url = GoogleCalendarService.get_authorization_url(user_id)
+    return RedirectResponse(auth_url)
+
+
+@router.get("/auth/google/callback", summary="Receive Google OAuth authorization code")
+async def google_callback(code: str = Query(...), state: str = Query(...)):
+    try:
+        tokens = GoogleCalendarService.exchange_code(code)
+        refresh_token = tokens.get("refresh_token")
+        id_token_jwt = tokens.get("id_token")
+
+        id_info = id_token.verify_oauth2_token(
+            id_token_jwt,
+            auth_requests.Request(),
+            GOOGLE_CLIENT_ID
+        )
+        google_email = id_info.get("email")
+
+        # Save the tokens
+        await update_user_google_connection(
+            user_id=state,
+            refresh_token=refresh_token,
+            email=google_email
+        )
+
+        html_content = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Google Connection Successful</title>
+            <style>
+                body {
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    height: 100vh;
+                    margin: 0;
+                    background-color: #0f0f13;
+                    color: #f3f4f6;
+                    text-align: center;
+                }
+                .card {
+                    background: #181823;
+                    border: 1px solid #2a2b3d;
+                    padding: 40px;
+                    border-radius: 16px;
+                    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+                }
+                h1 { color: #22c55e; margin-bottom: 8px; }
+                p { color: #9ca3af; font-size: 14px; }
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <h1>Connection Successful!</h1>
+                <p>Google Calendar has been successfully connected.</p>
+                <p>This window will close automatically.</p>
+            </div>
+            <script>
+                try {
+                    if (window.opener) {
+                        window.opener.postMessage("google-connected", "*");
+                    }
+                } catch (e) {
+                    console.error("Failed to post message", e);
+                }
+                setTimeout(function() {
+                    window.close();
+                }, 1500);
+            </script>
+        </body>
+        </html>
+        """
+        return HTMLResponse(content=html_content)
+    except Exception as exc:
+        logger.error("Google OAuth callback failed: %s", exc)
+        raise HTTPException(status_code=400, detail=f"OAuth callback failed: {exc}")
+
+
+@router.get("/google/status", summary="Check connection status with Google")
+async def google_status(user_id: str = Query(...)):
+    status_dict = await get_user_google_status(user_id)
+    return status_dict
+
+
+@router.post("/meetings/google", summary="Schedule a Google Meet meeting")
+async def create_google_meeting_route(
+    payload: CreateGoogleMeetingRequest,
+    user_id: str = Query(...),
+    organization_id: str = Query(...)
+):
+    refresh_token = await get_user_google_refresh_token(user_id)
+    if not refresh_token:
+        raise HTTPException(
+            status_code=400,
+            detail="Google account not connected. Please complete Google OAuth authorization."
+        )
+
+    try:
+        # Schedule via Calendar Service
+        created = GoogleCalendarService.create_meeting(
+            refresh_token=refresh_token,
+            title=payload.title,
+            description=payload.description,
+            start_time=payload.start,
+            end_time=payload.end,
+            timezone=payload.timezone,
+            attendees=payload.attendees
+        )
+
+        event_id = created.get("id")
+        meet_link = created.get("hangoutLink")
+
+        if not meet_link:
+            entry_points = created.get("conferenceData", {}).get("entryPoints", [])
+            for ep in entry_points:
+                if ep.get("entryPointType") == "video" or "meet.google.com" in ep.get("uri", ""):
+                    meet_link = ep.get("uri")
+                    break
+
+        if not meet_link:
+            meet_link = created.get("htmlLink", "")
+
+        # Parse times for db insert
+        start_time_dt = datetime.datetime.fromisoformat(payload.start)
+        end_time_dt = datetime.datetime.fromisoformat(payload.end)
+
+        # Store locally
+        meeting_id = await save_google_meeting(
+            organization_id=organization_id,
+            created_by_user_id=user_id,
+            title=payload.title,
+            description=payload.description,
+            google_calendar_event_id=event_id,
+            google_meet_link=meet_link,
+            start_time=start_time_dt,
+            end_time=end_time_dt,
+            timezone=payload.timezone,
+            attendees=payload.attendees
+        )
+
+        return {
+            "success": True,
+            "meeting": {
+                "id": meeting_id,
+                "title": payload.title,
+                "description": payload.description,
+                "meet_link": meet_link,
+                "start": payload.start,
+                "end": payload.end,
+                "timezone": payload.timezone,
+                "attendees": payload.attendees
+            }
+        }
+    except Exception as exc:
+        logger.error("Failed to create Google Meet meeting: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Google API Error: {exc}")
+
+
+@router.delete("/meetings/google/{meeting_id}", summary="Cancel a Google Meet meeting")
+async def cancel_google_meeting_route(meeting_id: str):
+    meeting = await get_google_meeting_by_id(meeting_id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    creator_user_id = meeting["created_by_user_id"]
+    refresh_token = await get_user_google_refresh_token(creator_user_id)
+    if not refresh_token:
+        raise HTTPException(
+            status_code=400,
+            detail="Creator user's Google Calendar is not connected. Unable to cancel Google event."
+        )
+
+    try:
+        # Delete from Google Calendar
+        GoogleCalendarService.cancel_meeting(
+            refresh_token=refresh_token,
+            calendar_event_id=meeting["google_calendar_event_id"]
+        )
+
+        # Update local db status to cancelled
+        await update_google_meeting_status(meeting_id, "cancelled")
+
+        return {"success": True, "message": "Meeting successfully cancelled"}
+    except Exception as exc:
+        logger.error("Failed to cancel Google Meet meeting: %s", exc)
+        await update_google_meeting_status(meeting_id, "cancelled")
+        return {"success": True, "message": f"Meeting status set to cancelled locally. Google sync error: {exc}"}
+
+
+@router.get("/meetings/google/latest", summary="Get all active upcoming scheduled Google Meet meetings")
+async def get_latest_google_meetings_route(
+    organization_id: str = Query(...),
+    user_id: str = Query(...)
+):
+    meetings = await get_active_google_meetings(organization_id, user_id)
+    return {"meetings": meetings}

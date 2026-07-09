@@ -61,8 +61,12 @@ export default function LoginPage() {
             fontSize: '24px',
             boxShadow: 'var(--shadow-glow)',
             marginBottom: '12px'
-          }}>⚡</div>
-          <h1 style={{ fontSize: '26px', fontWeight: 800, tracking: '-0.025em', margin: 0 }}>Action Center AI</h1>
+          }}>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+            </svg>
+          </div>
+          <h1 style={{ fontSize: '26px', fontWeight: 800, tracking: '-0.025em', margin: 0 }}>MeetSignal</h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '6px' }}>B2B Enterprise Portal</p>
         </div>
 
@@ -140,7 +144,7 @@ export default function LoginPage() {
           </form>
 
           <div style={{ textAlign: 'center', marginTop: '20px', fontSize: '13px', color: 'var(--text-secondary)' }}>
-            New to Action Center?{' '}
+            New to MeetSignal?{' '}
             <Link href="/register" style={{ color: 'var(--text-accent)', fontWeight: 600 }}>
               Register Organization
             </Link>

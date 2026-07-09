@@ -106,9 +106,13 @@ export default function Sidebar({ isOpen, onToggle, onUpload }) {
         <div className="sidebar-header">
           <div className="sidebar-logo" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div className="sidebar-logo-icon">⚡</div>
+              <div className="sidebar-logo-icon" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                </svg>
+              </div>
               <div>
-                <div className="sidebar-logo-text">Action Center</div>
+                <div className="sidebar-logo-text">MeetSignal</div>
                 <div className="sidebar-logo-sub">AI Meeting Agent</div>
               </div>
             </div>

@@ -80,6 +80,14 @@ async def init_db():
             );
         """))
 
+        # Add Google connection columns to users table
+        await conn.execute(text("""
+            ALTER TABLE users 
+            ADD COLUMN IF NOT EXISTS google_refresh_token VARCHAR(512) NULL,
+            ADD COLUMN IF NOT EXISTS google_connected BOOLEAN DEFAULT FALSE,
+            ADD COLUMN IF NOT EXISTS google_email VARCHAR(255) NULL;
+        """))
+
         # 3. teams
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS teams (
@@ -191,6 +199,26 @@ async def init_db():
             );
         """))
 
+        # 12. organization_google_meetings
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS organization_google_meetings (
+                id                       UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+                organization_id          UUID          NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                created_by_user_id       UUID          NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                meeting_title            VARCHAR(255)  NOT NULL,
+                meeting_description      TEXT,
+                google_calendar_event_id VARCHAR(255)  NOT NULL,
+                google_meet_link         VARCHAR(255)  NOT NULL,
+                meeting_start_time       TIMESTAMP WITH TIME ZONE NOT NULL,
+                meeting_end_time         TIMESTAMP WITH TIME ZONE NOT NULL,
+                timezone                 VARCHAR(100)  NOT NULL,
+                status                   VARCHAR(50)   NOT NULL DEFAULT 'scheduled',
+                attendees                JSONB         DEFAULT '[]'::jsonb,
+                created_at               TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                updated_at               TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+        """))
+
         logger.info("Creating B-Tree indexes on required lookups...")
         
         # Index on organization_id
@@ -199,6 +227,8 @@ async def init_db():
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_meetings_org_id ON meetings(organization_id);"))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_tasks_org_id ON tasks(organization_id);"))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_risks_org_id ON risks(organization_id);"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_org_google_meetings_org ON organization_google_meetings(organization_id);"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_org_google_meetings_user ON organization_google_meetings(created_by_user_id);"))
 
         # Index on team_id
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_team_members_team_id ON team_members(team_id);"))
@@ -605,4 +635,144 @@ async def execute_dynamic_query(filters: dict, organization_id: str):
                 else:
                     row_dict[k] = str(v) if v is not None else None
             rows.append(row_dict)
+        return rows
+
+
+# ── Google Meet Integration Database Helpers ───────────────────────────────────
+
+async def get_user_google_status(user_id: str) -> dict:
+    async with async_session_factory() as session:
+        result = await session.execute(
+            text("SELECT google_connected, google_email FROM users WHERE id = :id LIMIT 1"),
+            {"id": uuid.UUID(user_id) if isinstance(user_id, str) else user_id},
+        )
+        row = result.mappings().first()
+        if row:
+            return {
+                "connected": bool(row["google_connected"]),
+                "google_email": row["google_email"]
+            }
+        return {"connected": False}
+
+async def get_user_google_refresh_token(user_id: str) -> Optional[str]:
+    async with async_session_factory() as session:
+        result = await session.execute(
+            text("SELECT google_refresh_token FROM users WHERE id = :id LIMIT 1"),
+            {"id": uuid.UUID(user_id) if isinstance(user_id, str) else user_id},
+        )
+        row = result.mappings().first()
+        return row["google_refresh_token"] if row else None
+
+async def update_user_google_connection(user_id: str, refresh_token: str, email: str):
+    async with async_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text("""
+                    UPDATE users 
+                    SET google_refresh_token = :token, google_connected = TRUE, google_email = :email 
+                    WHERE id = :id
+                """),
+                {
+                    "id": uuid.UUID(user_id) if isinstance(user_id, str) else user_id,
+                    "token": refresh_token,
+                    "email": email
+                }
+            )
+
+async def save_google_meeting(
+    organization_id: str,
+    created_by_user_id: str,
+    title: str,
+    description: Optional[str],
+    google_calendar_event_id: str,
+    google_meet_link: str,
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+    timezone: str,
+    attendees: list
+) -> str:
+    async with async_session_factory() as session:
+        async with session.begin():
+            result = await session.execute(
+                text("""
+                    INSERT INTO organization_google_meetings (
+                        organization_id, created_by_user_id, meeting_title, meeting_description,
+                        google_calendar_event_id, google_meet_link, meeting_start_time, meeting_end_time,
+                        timezone, status, attendees
+                    ) VALUES (
+                        :org_id, :user_id, :title, :description,
+                        :event_id, :meet_link, :start_time, :end_time,
+                        :timezone, 'scheduled', CAST(:attendees AS JSONB)
+                    ) RETURNING id
+                """),
+                {
+                    "org_id": uuid.UUID(organization_id) if isinstance(organization_id, str) else organization_id,
+                    "user_id": uuid.UUID(created_by_user_id) if isinstance(created_by_user_id, str) else created_by_user_id,
+                    "title": title,
+                    "description": description,
+                    "event_id": google_calendar_event_id,
+                    "meet_link": google_meet_link,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "timezone": timezone,
+                    "attendees": json.dumps(attendees)
+                }
+            )
+            return str(result.scalar())
+
+async def get_google_meeting_by_id(meeting_id: str) -> Optional[dict]:
+    async with async_session_factory() as session:
+        result = await session.execute(
+            text("SELECT * FROM organization_google_meetings WHERE id = :id LIMIT 1"),
+            {"id": uuid.UUID(meeting_id) if isinstance(meeting_id, str) else meeting_id}
+        )
+        row = result.mappings().first()
+        if not row:
+            return None
+        d = dict(row)
+        for field in ("meeting_start_time", "meeting_end_time", "created_at", "updated_at"):
+            val = d.get(field)
+            if val is not None and hasattr(val, "isoformat"):
+                d[field] = val.isoformat()
+        return d
+
+async def update_google_meeting_status(meeting_id: str, status: str):
+    async with async_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text("""
+                    UPDATE organization_google_meetings 
+                    SET status = :status, updated_at = CURRENT_TIMESTAMP 
+                    WHERE id = :id
+                """),
+                {
+                    "id": uuid.UUID(meeting_id) if isinstance(meeting_id, str) else meeting_id,
+                    "status": status
+                }
+            )
+
+async def get_active_google_meetings(organization_id: str, user_id: str) -> List[dict]:
+    async with async_session_factory() as session:
+        result = await session.execute(
+            text("""
+                SELECT * FROM organization_google_meetings 
+                WHERE organization_id = :org_id 
+                  AND created_by_user_id = :user_id
+                  AND status = 'scheduled'
+                  AND meeting_start_time + INTERVAL '10 minutes' > CURRENT_TIMESTAMP
+                ORDER BY meeting_start_time ASC
+            """),
+            {
+                "org_id": uuid.UUID(organization_id) if isinstance(organization_id, str) else organization_id,
+                "user_id": uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+            }
+        )
+        rows = []
+        for row in result.mappings().all():
+            d = dict(row)
+            for field in ("meeting_start_time", "meeting_end_time", "created_at", "updated_at"):
+                val = d.get(field)
+                if val is not None and hasattr(val, "isoformat"):
+                    d[field] = val.isoformat()
+            rows.append(d)
         return rows

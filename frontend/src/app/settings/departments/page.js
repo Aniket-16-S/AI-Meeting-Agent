@@ -62,7 +62,12 @@ export default function DepartmentManagementPage() {
   if (!isOrgAdmin) {
     return (
       <div className="glass-card" style={{ padding: '32px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
-        <div style={{ fontSize: '48px' }}>🚫</div>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '8px' }}>
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--color-critical-text)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+        </div>
         <h3 style={{ fontSize: '18px', fontWeight: 600, color: 'var(--color-critical-text)' }}>Restricted Access</h3>
         <p style={{ color: 'var(--text-secondary)', fontSize: '14px', maxWidth: '440px' }}>
           Only Organization Administrators (OrgAdmin) are authorized to create or configure departments. Please contact your administrator.
@@ -74,7 +79,7 @@ export default function DepartmentManagementPage() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
       <div>
-        <h2 style={{ fontSize: '22px', fontWeight: 700, color: 'var(--text-primary)' }}>🏢 Department Management</h2>
+        <h2 style={{ fontSize: '22px', fontWeight: 700, color: 'var(--text-primary)' }}>Department Management</h2>
         <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '4px' }}>
           Create and manage organizational departments.
         </p>
@@ -207,7 +212,7 @@ export default function DepartmentManagementPage() {
           }}>
             <div>
               <h3 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '8px' }}>
-                ⚠️ Confirm Department Deletion
+                Confirm Department Deletion
               </h3>
               <p style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
                 Are you sure you want to delete department <strong>{deleteDeptName}</strong>? This action cannot be undone. Please enter your administrator password to authenticate:

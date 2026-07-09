@@ -95,7 +95,7 @@ export default function UserManagementPage() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
       <div>
-        <h2 style={{ fontSize: '22px', fontWeight: 700, color: 'var(--text-primary)' }}>👥 User Management</h2>
+        <h2 style={{ fontSize: '22px', fontWeight: 700, color: 'var(--text-primary)' }}>User Management</h2>
         <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '4px' }}>
           View team directory and register new employee accounts.
         </p>
@@ -346,7 +346,7 @@ export default function UserManagementPage() {
           }}>
             <div>
               <h3 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '8px' }}>
-                ⚠️ Confirm Account Deletion
+                Confirm Account Deletion
               </h3>
               <p style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
                 Are you sure you want to delete user <strong>{deleteUserName}</strong>? This action cannot be undone. Please enter your administrator password to authenticate:

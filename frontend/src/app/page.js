@@ -1,7 +1,16 @@
 'use client';
 import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
-import { fetchMeetings, fetchTasks, fetchRisks, updateTaskStatus } from '@/lib/api';
+import { 
+  fetchMeetings, 
+  fetchTasks, 
+  fetchRisks, 
+  updateTaskStatus,
+  fetchGoogleStatus,
+  cancelGoogleMeeting,
+  fetchLatestGoogleMeetings
+} from '@/lib/api';
+import ScheduleMeetModal from '@/components/ScheduleMeetModal';
 import { SkeletonCards, SkeletonTable } from '@/components/SkeletonLoader';
 import PriorityBadge from '@/components/PriorityBadge';
 import StatusBadge from '@/components/StatusBadge';
@@ -40,6 +49,34 @@ function formatDate(d) {
   }
 }
 
+function formatMeetingPeriod(startStr, endStr) {
+  if (!startStr || !endStr) return '';
+  try {
+    const start = new Date(startStr);
+    const end = new Date(endStr);
+    const today = new Date();
+    const tomorrow = new Date();
+    tomorrow.setDate(today.getDate() + 1);
+
+    let datePrefix = '';
+    if (start.toDateString() === today.toDateString()) {
+      datePrefix = 'Today';
+    } else if (start.toDateString() === tomorrow.toDateString()) {
+      datePrefix = 'Tomorrow';
+    } else {
+      datePrefix = start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }
+
+    const timeOpt = { hour: 'numeric', minute: '2-digit', hour12: true };
+    const startTimeStr = start.toLocaleTimeString('en-US', timeOpt);
+    const endTimeStr = end.toLocaleTimeString('en-US', timeOpt);
+
+    return `${datePrefix} • ${startTimeStr} - ${endTimeStr}`;
+  } catch (e) {
+    return '';
+  }
+}
+
 export default function DashboardPage() {
   const { user, department, organization, deptMeetingIds, users } = useAuth();
   const { addToast } = useToast();
@@ -47,6 +84,13 @@ export default function DashboardPage() {
   const [tasks, setTasks] = useState(null);
   const [risks, setRisks] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  // Google Meet States
+  const [googleConnected, setGoogleConnected] = useState(false);
+  const [googleEmail, setGoogleEmail] = useState('');
+  const [activeMeetings, setActiveMeetings] = useState([]);
+  const [selectedActiveMeetingId, setSelectedActiveMeetingId] = useState('');
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
 
   // Client-side mount state to avoid hydration issues with Recharts
   const [mounted, setMounted] = useState(false);
@@ -65,6 +109,72 @@ export default function DashboardPage() {
 
   // Days range for task velocity chart (10, 15, or 30 days)
   const [taskVelocityDays, setTaskVelocityDays] = useState(15);
+
+  const checkGoogleConnection = async () => {
+    if (!user?.id) return;
+    try {
+      const status = await fetchGoogleStatus(user.id);
+      setGoogleConnected(status.connected);
+      setGoogleEmail(status.google_email || '');
+    } catch (e) {
+      console.error('Failed to load Google connection status', e);
+    }
+  };
+
+  const fetchActiveMeetings = async () => {
+    if (!organization?.id || !user?.id) return;
+    try {
+      const list = await fetchLatestGoogleMeetings(organization.id, user.id);
+      setActiveMeetings(list);
+      if (list.length > 0) {
+        // If the current selected active meeting id is no longer in the list, default to the first one
+        if (!list.some(m => m.id === selectedActiveMeetingId)) {
+          setSelectedActiveMeetingId(list[0].id);
+        }
+      } else {
+        setSelectedActiveMeetingId('');
+      }
+    } catch (e) {
+      console.error('Failed to fetch active meetings', e);
+    }
+  };
+
+  const handleCancelMeeting = async (meetingId) => {
+    const confirm = window.confirm(
+      'Are you sure you want to cancel this meeting? This will delete the Google Calendar event and notify all participants.'
+    );
+    if (!confirm) return;
+
+    try {
+      await cancelGoogleMeeting(meetingId);
+      addToast('Google Meet meeting cancelled successfully', 'success');
+      fetchActiveMeetings();
+    } catch (e) {
+      addToast(e.message || 'Failed to cancel meeting', 'error');
+    }
+  };
+
+  // Google popup OAuth listener
+  useEffect(() => {
+    const handleOAuthMessage = (event) => {
+      if (event.data === 'google-connected') {
+        addToast('Google Calendar connected successfully!', 'success');
+        setGoogleConnected(true);
+        setShowScheduleModal(true);
+        checkGoogleConnection();
+        fetchActiveMeetings();
+      }
+    };
+    window.addEventListener('message', handleOAuthMessage);
+    return () => window.removeEventListener('message', handleOAuthMessage);
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (organization?.id && user?.id) {
+      checkGoogleConnection();
+      fetchActiveMeetings();
+    }
+  }, [organization?.id, user?.id]);
 
   const handleStatusChange = async (taskId, newStatus) => {
     try {
@@ -136,7 +246,7 @@ export default function DashboardPage() {
       if (!t.owner) return false;
       const ownerLower = String(t.owner).trim().toLowerCase();
       return (
-        ownerLower === userFullName || 
+        ownerLower === userFullName ||
         ownerLower === userFirstName ||
         ownerLower.includes(userFullName) ||
         ownerLower.includes(userFirstName)
@@ -146,19 +256,19 @@ export default function DashboardPage() {
 
   const sortedMyTasks = useMemo(() => {
     let sorted = [...myTasks].filter(t => t.status !== 'Closed');
-    
+
     if (sortMode === 'smart') {
       const pWeights = { 'Critical': 1, 'High': 0.75, 'Medium': 0.5, 'Low': 0.25 };
       sorted.sort((a, b) => {
         const pA = pWeights[a.priority] || 0.25;
         const pB = pWeights[b.priority] || 0.25;
-        
+
         const hoursA = a.due_date ? (new Date(a.due_date) - new Date()) / (1000 * 60 * 60) : 9999;
         const hoursB = b.due_date ? (new Date(b.due_date) - new Date()) / (1000 * 60 * 60) : 9999;
-        
+
         const scoreA = (pA * 0.6) + ((1 / (Math.max(hoursA, 0) + 24)) * 0.4 * 100);
         const scoreB = (pB * 0.6) + ((1 / (Math.max(hoursB, 0) + 24)) * 0.4 * 100);
-        
+
         return scoreB - scoreA;
       });
     } else if (sortMode.startsWith('priority')) {
@@ -180,7 +290,7 @@ export default function DashboardPage() {
 
   const groupedMyTasks = useMemo(() => {
     if (groupBy === 'none') return { 'All Tasks': sortedMyTasks };
-    
+
     const groups = {};
     const catLabels = {
       'Action Item': 'Action Items',
@@ -188,7 +298,7 @@ export default function DashboardPage() {
       'Follow-up': 'Follow-ups',
       'Info': 'General Notes',
     };
-    
+
     sortedMyTasks.forEach((t) => {
       let key = 'Other';
       if (groupBy === 'category') {
@@ -239,14 +349,14 @@ export default function DashboardPage() {
   const pieData = useMemo(() => {
     const tasksSource = userIsManager ? deptTasks : myTasks;
     if (!tasksSource) return [];
-    
+
     const counts = { Critical: 0, High: 0, Medium: 0, Low: 0 };
     tasksSource.forEach((t) => {
       if (!t.priority) return;
       const key = t.priority.charAt(0).toUpperCase() + t.priority.slice(1).toLowerCase();
       if (counts[key] !== undefined) counts[key]++;
     });
-    
+
     const totalCount = counts.Critical + counts.High + counts.Medium + counts.Low;
     if (totalCount === 0) return [];
     return [
@@ -326,7 +436,7 @@ export default function DashboardPage() {
       if (!t.owner) return false;
       const ownerLower = String(t.owner).trim().toLowerCase();
       return (
-        ownerLower === selUserLower || 
+        ownerLower === selUserLower ||
         ownerLower === selUserFirstName ||
         ownerLower.includes(selUserLower) ||
         ownerLower.includes(selUserFirstName)
@@ -337,20 +447,28 @@ export default function DashboardPage() {
   // Sorting for Backlog
   const sortedBacklog = useMemo(() => {
     let sorted = [...filteredBacklog].filter(t => t.status !== 'Closed');
-    
+
     if (sortMode === 'smart') {
       const pWeights = { 'Critical': 1, 'High': 0.75, 'Medium': 0.5, 'Low': 0.25 };
+
       sorted.sort((a, b) => {
         const pA = pWeights[a.priority] || 0.25;
         const pB = pWeights[b.priority] || 0.25;
-        
-        const hoursA = a.due_date ? (new Date(a.due_date) - new Date()) / (1000 * 60 * 60) : 9999;
-        const hoursB = b.due_date ? (new Date(b.due_date) - new Date()) / (1000 * 60 * 60) : 9999;
-        
-        const scoreA = (pA * 0.6) + ((1 / (Math.max(hoursA, 0) + 24)) * 0.4 * 100);
-        const scoreB = (pB * 0.6) + ((1 / (Math.max(hoursB, 0) + 24)) * 0.4 * 100);
-        
-        return scoreB - scoreA;
+
+        // Calculate hours remaining, ensuring we don't go negative for overdue tasks
+        const hoursA = Math.max(a.due_date ? (new Date(a.due_date) - new Date()) / (1000 * 60 * 60) : 9999, 0);
+        const hoursB = Math.max(b.due_date ? (new Date(b.due_date) - new Date()) / (1000 * 60 * 60) : 9999, 0);
+
+        // Normalized Urgency: 24 / (hours + 24)
+        // At 0 hours, this is 1.0. As hours increase, this approaches 0.
+        const urgencyA = 24 / (hoursA + 24);
+        const urgencyB = 24 / (hoursB + 24);
+
+        // Final Score: 50% Priority, 50% Urgency (Both max out at 1.0)
+        const scoreA = (pA * 0.5) + (urgencyA * 0.5);
+        const scoreB = (pB * 0.5) + (urgencyB * 0.5);
+
+        return scoreB - scoreA; // Sort descending (highest score first)
       });
     } else if (sortMode.startsWith('priority')) {
       const pWeights = { 'Critical': 4, 'High': 3, 'Medium': 2, 'Low': 1 };
@@ -372,7 +490,7 @@ export default function DashboardPage() {
   // Grouping for Backlog
   const groupedBacklog = useMemo(() => {
     if (groupBy === 'none') return { 'All Tasks': sortedBacklog };
-    
+
     const groups = {};
     const catLabels = {
       'Action Item': 'Action Items',
@@ -380,7 +498,7 @@ export default function DashboardPage() {
       'Follow-up': 'Follow-ups',
       'Info': 'General Notes',
     };
-    
+
     sortedBacklog.forEach((t) => {
       let key = 'Other';
       if (groupBy === 'category') {
@@ -415,12 +533,168 @@ export default function DashboardPage() {
 
   return (
     <div className="page-animate">
-      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16 }}>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>
         <div>
           <h1 className="page-title">{userIsManager ? 'Team Oversight & Analytics' : 'My Work'}</h1>
           <p className="page-subtitle">
             {department?.name} Department, {organization?.name}
           </p>
+        </div>
+
+        {/* Google Meet Actions & Widget Column/Row */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+          {/* Active Google Meet Widget */}
+          {activeMeetings && activeMeetings.length > 0 && (() => {
+            const currentMeeting = activeMeetings.find(m => m.id === selectedActiveMeetingId) || activeMeetings[0];
+            return (
+              <div 
+                className="glass-card" 
+                style={{ 
+                  padding: '12px 18px', 
+                  borderRadius: '12px', 
+                  display: 'flex', 
+                  flexDirection: 'column', 
+                  gap: '8px', 
+                  minWidth: '320px', 
+                  border: '1px solid var(--border-primary)',
+                  boxShadow: 'var(--shadow-card)',
+                  background: 'linear-gradient(135deg, var(--bg-secondary), var(--bg-tertiary))'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-primary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Upcoming Meet
+                  </span>
+                  
+                  {/* Select Dropdown if > 1 meetings */}
+                  {activeMeetings.length > 1 && (
+                    <select
+                      value={selectedActiveMeetingId}
+                      onChange={(e) => setSelectedActiveMeetingId(e.target.value)}
+                      style={{
+                        background: 'var(--bg-input)',
+                        border: '1px solid var(--border-primary)',
+                        color: 'var(--text-primary)',
+                        borderRadius: '6px',
+                        padding: '2px 6px',
+                        fontSize: '11px',
+                        outline: 'none',
+                        cursor: 'pointer',
+                        maxWidth: '160px'
+                      }}
+                    >
+                      {activeMeetings.map(m => (
+                        <option key={m.id} value={m.id}>
+                          {m.meeting_title}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '280px' }}>
+                    {currentMeeting.meeting_title}
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                    {formatMeetingPeriod(currentMeeting.meeting_start_time, currentMeeting.meeting_end_time)}
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                  <a
+                    href={currentMeeting.google_meet_link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="upload-submit-btn"
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: '6px',
+                      background: 'var(--accent-primary)',
+                      color: '#fff',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      textDecoration: 'none',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '4px',
+                      width: 'auto',
+                      height: 'auto',
+                      margin: 0
+                    }}
+                  >
+                    Join Google Meet ↗
+                  </a>
+                  <button
+                    onClick={() => handleCancelMeeting(currentMeeting.id)}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: '6px',
+                      border: '1px solid var(--border-primary)',
+                      background: 'rgba(239, 68, 68, 0.1)',
+                      color: '#ef4444',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      width: 'auto',
+                      height: 'auto'
+                    }}
+                    title="Cancel Meeting"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Schedule Meet Button */}
+          <button
+            onClick={() => {
+              if (googleConnected) {
+                setShowScheduleModal(true);
+              } else {
+                const width = 600;
+                const height = 700;
+                const left = window.screen.width / 2 - width / 2;
+                const top = window.screen.height / 2 - height / 2;
+                window.open(
+                  `/api/auth/google/login?user_id=${user?.id}`,
+                  'Google OAuth Connect',
+                  `width=${width},height=${height},left=${left},top=${top}`
+                );
+              }
+            }}
+            className="upload-submit-btn"
+            style={{
+              padding: '10px 18px',
+              borderRadius: '8px',
+              border: 'none',
+              background: 'linear-gradient(135deg, hsl(250, 91%, 55%), hsl(280, 80%, 60%))',
+              color: '#ffffff',
+              fontSize: '13px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              boxShadow: '0 4px 14px rgba(99, 102, 241, 0.25)',
+              margin: 0,
+              width: 'auto'
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+              <line x1="16" y1="2" x2="16" y2="6" />
+              <line x1="8" y1="2" x2="8" y2="6" />
+              <line x1="3" y1="10" x2="21" y2="10" />
+            </svg>
+            Schedule Meet
+          </button>
         </div>
       </div>
 
@@ -466,7 +740,6 @@ export default function DashboardPage() {
             <div className="glass-card" style={{ padding: 24, display: 'flex', flexDirection: 'column', height: 360 }}>
               <div className="section-header" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: 12, marginBottom: 16 }}>
                 <span className="section-title">
-                  <span className="section-title-icon">📊</span>
                   My Tasks Severity Breakdown
                 </span>
               </div>
@@ -516,19 +789,19 @@ export default function DashboardPage() {
           <div className="glass-card" style={{ padding: 24, display: 'flex', flexDirection: 'column', marginBottom: 32 }}>
             <div className="section-header" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: 12, marginBottom: 20 }}>
               <span className="section-title">
-                <span className="section-title-icon">🎯</span>
                 Next Actionable Tasks
               </span>
             </div>
             {sortedMyTasks.filter(t => t.status !== 'Closed').length === 0 ? (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 120, color: 'var(--text-tertiary)', fontSize: 13 }}>
-                No upcoming actionable tasks. All caught up! 🎉
+                No upcoming actionable tasks. All caught up!
               </div>
             ) : (
               <div style={{
                 display: 'grid',
                 gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
-                gap: 20
+                gap: 20,
+                alignItems: 'start'
               }}>
                 {sortedMyTasks.filter(t => t.status !== 'Closed').slice(0, 4).map((t) => {
                   const mtg = meetings?.find((m) => m.id === t.meeting_id);
@@ -544,19 +817,19 @@ export default function DashboardPage() {
                       boxShadow: 'var(--shadow-card)',
                       transition: 'transform 0.2s ease, box-shadow 0.2s ease'
                     }}
-                    className="hover-card-effect"
+                      className="hover-card-effect"
                     >
-                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1.5, flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1.5 }}>
                         {t.task_description}
                       </div>
-                      
+
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, borderTop: '1px solid var(--border-subtle)', paddingTop: 10 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11 }}>
                           <span style={{ color: 'var(--text-tertiary)' }}>
                             Due: {formatDate(t.due_date)}
                           </span>
                         </div>
-                        
+
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
                           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                             <PriorityBadge level={t.priority} />
@@ -579,7 +852,6 @@ export default function DashboardPage() {
           {/* Member Tasks Table */}
           <div className="section-header" style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
             <span className="section-title">
-              <span className="section-title-icon">📋</span>
               My Assigned Action Items
               <span style={{ fontSize: 12, color: 'var(--text-secondary)', marginLeft: 12, fontWeight: 500 }}>
                 ({myTasks.length} total)
@@ -595,7 +867,7 @@ export default function DashboardPage() {
                 <option value="category">Group By: Category</option>
                 <option value="meeting">Group By: Context (Meeting)</option>
               </select>
-              
+
               <select
                 value={sortMode}
                 onChange={(e) => setSortMode(e.target.value)}
@@ -660,69 +932,69 @@ export default function DashboardPage() {
                         </span>
                       </div>
                     )}
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Task</th>
-                        <th>Meeting Source</th>
-                        <th>Deadline</th>
-                        <th>Priority</th>
-                        <th>Status</th>
-                        <th style={{ textAlign: 'right' }}>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {groupedMyTasks[groupKey].map((t) => {
-                        const mtg = meetings?.find((m) => m.id === t.meeting_id);
-                        return (
-                          <tr key={t.id}>
-                            <td className="td-description">{t.task_description}</td>
-                            <td>
-                              {mtg ? (
-                                <Link href={`/meetings/${mtg.id}`} style={{ fontWeight: 500 }}>
-                                  {mtg.title || mtg.file_name}
-                                </Link>
-                              ) : (
-                                '-'
-                              )}
-                            </td>
-                            <td className="td-date">{formatDate(t.due_date)}</td>
-                            <td>
-                              <PriorityBadge level={t.priority} />
-                            </td>
-                            <td>
-                              <StatusBadge status={t.status} />
-                            </td>
-                            <td style={{ textAlign: 'right' }}>
-                              <select
-                                value={t.status}
-                                onChange={(e) => handleStatusChange(t.id, e.target.value)}
-                                style={{
-                                  background: t.status === 'Closed' ? 'rgba(34, 197, 94, 0.1)' : t.status === 'In Progress' ? 'hsla(45, 93%, 47%, 0.1)' : 'var(--bg-input)',
-                                  color: t.status === 'Closed' ? '#22c55e' : t.status === 'In Progress' ? 'hsl(45, 93%, 40%)' : 'var(--text-primary)',
-                                  border: `1px solid ${t.status === 'Closed' ? 'rgba(34, 197, 94, 0.2)' : t.status === 'In Progress' ? 'hsla(45, 93%, 47%, 0.2)' : 'var(--border-primary)'}`,
-                                  cursor: 'pointer',
-                                  padding: '6px 12px',
-                                  borderRadius: '6px',
-                                  fontSize: '12px',
-                                  fontWeight: 500,
-                                  outline: 'none',
-                                }}
-                              >
-                                <option value="Open">Open</option>
-                                <option value="In Progress">In Progress</option>
-                                <option value="Closed">Closed</option>
-                              </select>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              );
-            })}
-          </div>
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Task</th>
+                          <th>Meeting Source</th>
+                          <th>Deadline</th>
+                          <th>Priority</th>
+                          <th>Status</th>
+                          <th style={{ textAlign: 'right' }}>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {groupedMyTasks[groupKey].map((t) => {
+                          const mtg = meetings?.find((m) => m.id === t.meeting_id);
+                          return (
+                            <tr key={t.id}>
+                              <td className="td-description">{t.task_description}</td>
+                              <td>
+                                {mtg ? (
+                                  <Link href={`/meetings/${mtg.id}`} style={{ fontWeight: 500 }}>
+                                    {mtg.title || mtg.file_name}
+                                  </Link>
+                                ) : (
+                                  '-'
+                                )}
+                              </td>
+                              <td className="td-date">{formatDate(t.due_date)}</td>
+                              <td>
+                                <PriorityBadge level={t.priority} />
+                              </td>
+                              <td>
+                                <StatusBadge status={t.status} />
+                              </td>
+                              <td style={{ textAlign: 'right' }}>
+                                <select
+                                  value={t.status}
+                                  onChange={(e) => handleStatusChange(t.id, e.target.value)}
+                                  style={{
+                                    background: t.status === 'Closed' ? 'rgba(34, 197, 94, 0.1)' : t.status === 'In Progress' ? 'hsla(45, 93%, 47%, 0.1)' : 'var(--bg-input)',
+                                    color: t.status === 'Closed' ? '#22c55e' : t.status === 'In Progress' ? 'hsl(45, 93%, 40%)' : 'var(--text-primary)',
+                                    border: `1px solid ${t.status === 'Closed' ? 'rgba(34, 197, 94, 0.2)' : t.status === 'In Progress' ? 'hsla(45, 93%, 47%, 0.2)' : 'var(--border-primary)'}`,
+                                    cursor: 'pointer',
+                                    padding: '6px 12px',
+                                    borderRadius: '6px',
+                                    fontSize: '12px',
+                                    fontWeight: 500,
+                                    outline: 'none',
+                                  }}
+                                >
+                                  <option value="Open">Open</option>
+                                  <option value="In Progress">In Progress</option>
+                                  <option value="Closed">Closed</option>
+                                </select>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })}
+            </div>
           )}
         </>
       )}
@@ -738,7 +1010,6 @@ export default function DashboardPage() {
             <div className="glass-card" style={{ padding: 24, display: 'flex', flexDirection: 'column', height: 380 }}>
               <div className="section-header" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: 12, marginBottom: 16 }}>
                 <span className="section-title">
-                  <span className="section-title-icon">📊</span>
                   Task Severity Breakdown
                 </span>
               </div>
@@ -787,7 +1058,6 @@ export default function DashboardPage() {
             <div className="glass-card" style={{ padding: 24, display: 'flex', flexDirection: 'column', height: 380 }}>
               <div className="section-header" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: 12, marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span className="section-title">
-                  <span className="section-title-icon">📈</span>
                   Task Velocity <span style={{ fontWeight: 400, fontSize: '13px', marginLeft: '6px', color: 'var(--text-secondary)' }}>(Last {taskVelocityDays} days)</span>
                 </span>
                 <select
@@ -848,19 +1118,19 @@ export default function DashboardPage() {
           <div className="glass-card" style={{ padding: 24, display: 'flex', flexDirection: 'column', marginBottom: 32 }}>
             <div className="section-header" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: 12, marginBottom: 20 }}>
               <span className="section-title">
-                <span className="section-title-icon">🎯</span>
                 Top 8 Next Actionable Tasks
               </span>
             </div>
             {next8ActionableTasks.length === 0 ? (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 120, color: 'var(--text-tertiary)', fontSize: 13 }}>
-                No upcoming actionable tasks. All caught up! 🎉
+                No upcoming actionable tasks. All caught up!
               </div>
             ) : (
               <div style={{
                 display: 'grid',
                 gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-                gap: 20
+                gap: 20,
+                alignItems: 'start'
               }}>
                 {next8ActionableTasks.map((t) => {
                   const mtg = meetings?.find((m) => m.id === t.meeting_id);
@@ -876,12 +1146,12 @@ export default function DashboardPage() {
                       boxShadow: 'var(--shadow-card)',
                       transition: 'transform 0.2s ease, box-shadow 0.2s ease'
                     }}
-                    className="hover-card-effect"
+                      className="hover-card-effect"
                     >
-                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1.5, flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1.5 }}>
                         {t.task_description}
                       </div>
-                      
+
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, borderTop: '1px solid var(--border-subtle)', paddingTop: 10 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11 }}>
                           <span style={{ color: 'var(--text-secondary)' }}>
@@ -891,7 +1161,7 @@ export default function DashboardPage() {
                             Due: {formatDate(t.due_date)}
                           </span>
                         </div>
-                        
+
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
                           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                             <PriorityBadge level={t.priority} />
@@ -914,7 +1184,6 @@ export default function DashboardPage() {
           {/* Team Backlog Table */}
           <div className="section-header" style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
             <span className="section-title">
-              <span className="section-title-icon">📋</span>
               Team Backlog
               <span style={{ fontSize: 12, color: 'var(--text-secondary)', marginLeft: 12, fontWeight: 500 }}>
                 ({filteredBacklog.length} total)
@@ -930,7 +1199,7 @@ export default function DashboardPage() {
                 <option value="category">Group By: Category</option>
                 <option value="meeting">Group By: Context (Meeting)</option>
               </select>
-              
+
               <select
                 value={sortMode}
                 onChange={(e) => setSortMode(e.target.value)}
@@ -1087,6 +1356,13 @@ export default function DashboardPage() {
             </div>
           )}
         </>
+      )}
+
+      {showScheduleModal && (
+        <ScheduleMeetModal
+          onClose={() => setShowScheduleModal(false)}
+          onSuccess={() => fetchActiveMeetings()}
+        />
       )}
     </div>
   );

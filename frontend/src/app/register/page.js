@@ -65,11 +65,14 @@ export default function RegisterPage() {
             background: 'linear-gradient(135deg, hsl(250, 91%, 55%), hsl(280, 80%, 60%))',
             alignItems: 'center',
             justifyContent: 'center',
-            fontSize: '24px',
             boxShadow: 'var(--shadow-glow)',
             marginBottom: '12px'
-          }}>⚡</div>
-          <h1 style={{ fontSize: '26px', fontWeight: 800, tracking: '-0.025em', margin: 0 }}>Action Center AI</h1>
+          }}>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+            </svg>
+          </div>
+          <h1 style={{ fontSize: '26px', fontWeight: 800, tracking: '-0.025em', margin: 0 }}>MeetSignal</h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '6px' }}>B2B Enterprise Portal</p>
         </div>
 

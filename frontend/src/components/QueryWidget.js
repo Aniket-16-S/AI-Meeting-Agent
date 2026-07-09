@@ -110,7 +110,7 @@ export default function QueryWidget() {
               e.currentTarget.style.boxShadow = '0 2px 4px rgba(16, 185, 129, 0.2)';
             }}
           >
-            📊 Download Excel (XLSX)
+            Download Excel (XLSX)
           </button>
         </div>
         <div className="query-results-table-scroll" style={{ overflowX: 'auto', width: '100%', border: '1px solid var(--border-subtle)', borderRadius: '6px' }}>
@@ -173,16 +173,26 @@ export default function QueryWidget() {
           setShowBubble(false);
         }}
         title="Ask AI Assistant"
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
       >
-        💬
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+        </svg>
       </button>
 
       {/* Chat Window */}
       {open && (
         <div className="query-window">
           <div className="query-window-header">
-            <div className="query-window-title">
-              <span>🤖</span> Query Assistant
+            <div className="query-window-title" style={{ display: 'flex', alignItems: 'center' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6px' }}>
+                <rect x="3" y="11" width="18" height="10" rx="2"/>
+                <circle cx="12" cy="5" r="2"/>
+                <path d="M12 7v4"/>
+                <line x1="8" y1="16" x2="8" y2="16"/>
+                <line x1="16" y1="16" x2="16" y2="16"/>
+              </svg>
+              Query Assistant
             </div>
             <button className="query-window-close" onClick={() => setOpen(false)}>
               ✕
@@ -192,7 +202,12 @@ export default function QueryWidget() {
           <div className="query-messages">
             {messages.length === 0 && !loading && (
               <div className="empty-state" style={{ padding: '24px 8px' }}>
-                <div className="empty-state-icon" style={{ fontSize: 36 }}>🔍</div>
+                <div className="empty-state-icon" style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
+                  <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="8"/>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                  </svg>
+                </div>
                 <div className="empty-state-title" style={{ fontSize: 14 }}>
                   Ask anything about your meetings
                 </div>

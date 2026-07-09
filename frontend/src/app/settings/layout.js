@@ -24,13 +24,13 @@ export default function SettingsLayout({ children }) {
   const menuItems = [
     {
       href: '/settings/users',
-      label: '👥 User Management',
+      label: 'User Management',
       active: pathname === '/settings/users',
       visible: true
     },
     {
       href: '/settings/departments',
-      label: '🏢 Department Management',
+      label: 'Department Management',
       active: pathname === '/settings/departments',
       visible: isOrgAdmin
     }

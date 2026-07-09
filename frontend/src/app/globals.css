@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════
-   Action Center AI — Design System
+   MeetSignal — Design System
    Premium Light Theme
    ═══════════════════════════════════════════════════════════════ */
 
@@ -185,6 +185,18 @@ button {
 .priority-badge.high { background: var(--color-high-bg); color: var(--color-high-text); border: 1px solid var(--color-high-border); }
 .priority-badge.medium { background: var(--color-medium-bg); color: var(--color-medium-text); border: 1px solid var(--color-medium-border); }
 .priority-badge.low { background: var(--color-low-bg); color: var(--color-low-text); border: 1px solid var(--color-low-border); }
+
+.priority-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.priority-badge.critical .priority-dot { background-color: var(--color-critical-text); }
+.priority-badge.high .priority-dot { background-color: var(--color-high-text); }
+.priority-badge.medium .priority-dot { background-color: var(--color-medium-text); }
+.priority-badge.low .priority-dot { background-color: var(--color-low-text); }
 
 /* ── Sidebar ────────────────────────────────────────────────── */
 .sidebar-overlay {

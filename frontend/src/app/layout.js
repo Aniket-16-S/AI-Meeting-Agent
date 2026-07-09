@@ -62,9 +62,9 @@ function LayoutWrapper({ children }) {
             setRefreshKey((k) => k + 1);
             
             if (status === 'COMPLETED') {
-              addToast(`"${meeting.filename}" processed successfully! 🎉`, 'success');
+              addToast(`"${meeting.filename}" processed successfully!`, 'success');
             } else {
-              addToast(`Failed to process "${meeting.filename}". ❌`, 'error');
+              addToast(`Failed to process "${meeting.filename}".`, 'error');
             }
           }
         } catch (e) {
@@ -80,7 +80,11 @@ function LayoutWrapper({ children }) {
     return (
       <div style={{ display: 'flex', height: '100vh', width: '100vw', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontFamily: 'sans-serif' }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
-          <div className="pulse-danger" style={{ width: 48, height: 48, borderRadius: '50%', background: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24 }}>⚡</div>
+          <div className="pulse-danger" style={{ width: 48, height: 48, borderRadius: '50%', background: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+            </svg>
+          </div>
           <div style={{ fontWeight: 500 }}>Initializing Command Center…</div>
         </div>
       </div>
@@ -121,7 +125,7 @@ function LayoutWrapper({ children }) {
             <line x1="3" y1="18" x2="21" y2="18" />
           </svg>
         </button>
-        <span className="topbar-title">Action Center AI</span>
+        <span className="topbar-title">MeetSignal</span>
         
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center' }}>
           <ThemeToggle />
@@ -185,7 +189,29 @@ function ThemeToggle() {
         transition: 'all 0.2s ease',
       }}
     >
-      {theme === 'dark' ? '☀️ Light' : '🌙 Dark'}
+      {theme === 'dark' ? (
+        <>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '2px' }}>
+            <circle cx="12" cy="12" r="5"/>
+            <line x1="12" y1="1" x2="12" y2="3"/>
+            <line x1="12" y1="21" x2="12" y2="23"/>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+            <line x1="1" y1="12" x2="3" y2="12"/>
+            <line x1="21" y1="12" x2="23" y2="12"/>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+          </svg>
+          Light
+        </>
+      ) : (
+        <>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '2px' }}>
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          </svg>
+          Dark
+        </>
+      )}
     </button>
   );
 }
@@ -194,10 +220,10 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <title>Action Center AI, Project Command Center</title>
+        <title>MeetSignal, Project Command Center</title>
         <meta name="description" content="AI-powered meeting transcript analyzer. Extract tasks, risks, and insights automatically." />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>" />
+        <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' fill='gold'><polygon points='55,10 15,60 50,60 45,90 85,40 50,40'/></svg>" />
       </head>
       <body>
         <ThemeProvider>
