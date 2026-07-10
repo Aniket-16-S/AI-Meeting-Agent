@@ -30,6 +30,9 @@ Stores user records belonging to an organization.
 | `email` | VARCHAR(255) UNIQUE | Unique login email. |
 | `password_hash` | VARCHAR(255) NOT NULL | Cryptographic password hash. |
 | `role` | `user_role` ENUM | `admin` or `employee`. |
+| `google_refresh_token` | VARCHAR(512) | Google Calendar OAuth refresh token (NULL if not connected). |
+| `google_connected` | BOOLEAN | Flag indicating whether Google Calendar is connected (defaults to `FALSE`). |
+| `google_email` | VARCHAR(255) | User's connected Google account email. |
 
 ---
 
@@ -158,6 +161,28 @@ Stores potential risks discussed during the meeting.
 
 ---
 
+### 12. `organization_google_meetings`
+Stores Google Meet meetings scheduled under a tenant organization.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID PK | Auto-generated. |
+| `organization_id` | UUID FK | References `organizations.id` with `ON DELETE CASCADE`. |
+| `created_by_user_id` | UUID FK | References `users.id` with `ON DELETE CASCADE`. |
+| `meeting_title` | VARCHAR(255) NOT NULL | Title of the Google Meet. |
+| `meeting_description` | TEXT | Description/agenda of the meeting. |
+| `google_calendar_event_id` | VARCHAR(255) NOT NULL | Google Calendar event resource ID. |
+| `google_meet_link` | VARCHAR(255) NOT NULL | Join URL for Google Meet. |
+| `meeting_start_time` | TIMESTAMP WITH TIME ZONE | Scheduled start time. |
+| `meeting_end_time` | TIMESTAMP WITH TIME ZONE | Scheduled end time. |
+| `timezone` | VARCHAR(100) NOT NULL | Timezone name. |
+| `status` | VARCHAR(50) NOT NULL | `scheduled`, `cancelled` (defaults to `scheduled`). |
+| `attendees` | JSONB | List of invitees' emails (`[]`). |
+| `created_at` | TIMESTAMP WITH TIME ZONE | Creation timestamp. |
+| `updated_at` | TIMESTAMP WITH TIME ZONE | Update timestamp. |
+
+---
+
 ## Indexing Structure
 High-speed lookup index optimizations are created as B-Tree structures:
 - `idx_users_org_id` on `users(organization_id)`
@@ -172,3 +197,5 @@ High-speed lookup index optimizations are created as B-Tree structures:
 - `idx_tasks_meeting_id` on `tasks(meeting_id)`
 - `idx_risks_meeting_id` on `risks(meeting_id)`
 - `idx_meetings_content_hash` on `meetings(content_hash)`
+- `idx_org_google_meetings_org` on `organization_google_meetings(organization_id)`
+- `idx_org_google_meetings_user` on `organization_google_meetings(created_by_user_id)`

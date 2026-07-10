@@ -470,6 +470,36 @@ async def delete_meeting(meeting_id: str):
             )
 
 
+async def delete_task(task_id: str):
+    """Hard-delete a single task row by ID."""
+    async with async_session_factory() as session:
+        async with session.begin():
+            result = await session.execute(
+                text("DELETE FROM tasks WHERE id = :id RETURNING id"),
+                {"id": uuid.UUID(task_id) if isinstance(task_id, str) else task_id},
+            )
+            deleted = result.fetchone()
+            if not deleted:
+                raise ValueError(f"Task {task_id} not found")
+
+
+async def delete_tasks_bulk(task_ids: list[str]) -> int:
+    """Hard-delete multiple tasks in a single atomic query.
+
+    Returns the number of rows actually deleted.
+    """
+    if not task_ids:
+        return 0
+    parsed_ids = [uuid.UUID(tid) if isinstance(tid, str) else tid for tid in task_ids]
+    async with async_session_factory() as session:
+        async with session.begin():
+            result = await session.execute(
+                text("DELETE FROM tasks WHERE id = ANY(:ids) RETURNING id"),
+                {"ids": parsed_ids},
+            )
+            return len(result.fetchall())
+
+
 # Queries
 
 async def get_all_meetings(organization_id: str):

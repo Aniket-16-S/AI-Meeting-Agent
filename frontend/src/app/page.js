@@ -92,7 +92,7 @@ export default function DashboardPage() {
   const [selectedActiveMeetingId, setSelectedActiveMeetingId] = useState('');
   const [showScheduleModal, setShowScheduleModal] = useState(false);
 
-  // Client-side mount state to avoid hydration issues with Recharts
+  // Client-side mount state
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
     setMounted(true);
@@ -100,15 +100,16 @@ export default function DashboardPage() {
 
   const userIsManager = user?.role === 'admin';
 
+  // Card filter states
+  const [cardFilter, setCardFilter] = useState(null); // 'requires-attention', 'unassigned'
+  const [memberCardFilter, setMemberCardFilter] = useState(null); // 'immediate', 'up-next', 'completed'
+
   // Sorting and Grouping for Tasks
   const [sortMode, setSortMode] = useState('smart'); // date-asc, date-desc, priority-desc, priority-asc, smart
   const [groupBy, setGroupBy] = useState('none'); // none, category, meeting
 
   // User Filter for Manager Backlog
   const [selectedUserFilter, setSelectedUserFilter] = useState('');
-
-  // Days range for task velocity chart (10, 15, or 30 days)
-  const [taskVelocityDays, setTaskVelocityDays] = useState(15);
 
   const checkGoogleConnection = async () => {
     if (!user?.id) return;
@@ -255,11 +256,41 @@ export default function DashboardPage() {
   }, [tasks, user]);
 
   const sortedMyTasks = useMemo(() => {
-    let sorted = [...myTasks].filter(t => t.status !== 'Closed');
+    let baseTasks = [...myTasks];
+    
+    if (memberCardFilter === 'completed') {
+      baseTasks = baseTasks.filter(t => t.status === 'Closed');
+    } else {
+      baseTasks = baseTasks.filter(t => t.status !== 'Closed');
+    }
+
+    if (memberCardFilter === 'immediate') {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(today.getDate() + 1);
+      baseTasks = baseTasks.filter(t => {
+        if (!t.due_date) return false;
+        const d = new Date(t.due_date);
+        return d < tomorrow;
+      });
+    } else if (memberCardFilter === 'up-next') {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(today.getDate() + 1);
+      const nextWeek = new Date(today);
+      nextWeek.setDate(today.getDate() + 7);
+      baseTasks = baseTasks.filter(t => {
+        if (!t.due_date) return false;
+        const d = new Date(t.due_date);
+        return d >= tomorrow && d <= nextWeek;
+      });
+    }
 
     if (sortMode === 'smart') {
       const pWeights = { 'Critical': 1, 'High': 0.75, 'Medium': 0.5, 'Low': 0.25 };
-      sorted.sort((a, b) => {
+      baseTasks.sort((a, b) => {
         const pA = pWeights[a.priority] || 0.25;
         const pB = pWeights[b.priority] || 0.25;
 
@@ -273,20 +304,20 @@ export default function DashboardPage() {
       });
     } else if (sortMode.startsWith('priority')) {
       const pWeights = { 'Critical': 4, 'High': 3, 'Medium': 2, 'Low': 1 };
-      sorted.sort((a, b) => {
+      baseTasks.sort((a, b) => {
         const pA = pWeights[a.priority] || 1;
         const pB = pWeights[b.priority] || 1;
         return sortMode === 'priority-desc' ? pB - pA : pA - pB;
       });
     } else {
-      sorted.sort((a, b) => {
+      baseTasks.sort((a, b) => {
         const dateA = a.due_date ? new Date(a.due_date) : new Date('9999-12-31');
         const dateB = b.due_date ? new Date(b.due_date) : new Date('9999-12-31');
         return sortMode === 'date-asc' ? dateA - dateB : dateB - dateA;
       });
     }
-    return sorted;
-  }, [myTasks, sortMode]);
+    return baseTasks;
+  }, [myTasks, memberCardFilter, sortMode]);
 
   const groupedMyTasks = useMemo(() => {
     if (groupBy === 'none') return { 'All Tasks': sortedMyTasks };
@@ -313,136 +344,125 @@ export default function DashboardPage() {
     return groups;
   }, [sortedMyTasks, groupBy, meetings]);
 
-  const memberKPIs = useMemo(() => {
-    if (!myTasks) return { open: 0, closed: 0, total: 0, completionRate: 100, overdue: 0 };
+  // Metrics calculations for overview cards
+  const overdueTasksCount = useMemo(() => {
+    if (!deptTasks) return 0;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-
-    const open = myTasks.filter((t) => t.status === 'Open' || t.status === 'In Progress').length;
-    const closed = myTasks.filter((t) => t.status === 'Closed').length;
-    const total = open + closed;
-    const completionRate = total > 0 ? Math.round((closed / total) * 100) : 100;
-
-    const overdue = myTasks.filter((t) => {
+    return deptTasks.filter((t) => {
       if ((t.status === 'Open' || t.status === 'In Progress') && t.due_date) {
         const d = new Date(t.due_date);
         return d < today;
       }
       return false;
     }).length;
+  }, [deptTasks]);
 
-    return { open, closed, total, completionRate, overdue };
+  const criticalRisksCount = useMemo(() => {
+    if (!deptRis) return 0;
+    return deptRis.filter((r) => r.severity === 'Critical').length;
+  }, [deptRis]);
+
+  const requiresAttentionCount = overdueTasksCount + criticalRisksCount;
+
+  const unassignedTasksCount = useMemo(() => {
+    if (!deptTasks) return 0;
+    return deptTasks.filter((t) => t.owner === 'Unassigned' || !t.owner).length;
+  }, [deptTasks]);
+
+  const meetingsThisWeekCount = useMemo(() => {
+    if (!deptMeetings) return 0;
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+    return deptMeetings.filter(m => {
+      if (!m.upload_date) return false;
+      return new Date(m.upload_date) >= oneWeekAgo;
+    }).length;
+  }, [deptMeetings]);
+
+  const immediateTasks = useMemo(() => {
+    if (!myTasks) return [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+
+    return myTasks.filter((t) => {
+      if (t.status === 'Closed') return false;
+      if (!t.due_date) return false;
+      const d = new Date(t.due_date);
+      return d < tomorrow;
+    });
   }, [myTasks]);
 
-  // Manager-Specific calculations
-  const managerKPIs = useMemo(() => {
-    if (!deptTasks || !deptRis) return { openTasks: 0, closedTasks: 0, criticalRisks: 0, unassigned: 0 };
-    const openTasks = deptTasks.filter((t) => t.status === 'Open' || t.status === 'In Progress').length;
-    const closedTasks = deptTasks.filter((t) => t.status === 'Closed' || t.status === 'Done').length;
-    const criticalRisks = deptRis.filter((r) => r.severity === 'Critical').length;
-    const unassigned = deptTasks.filter((t) => t.owner === 'Unassigned' || !t.owner).length;
-
-    return { openTasks, closedTasks, criticalRisks, unassigned };
-  }, [deptTasks, deptRis]);
-
-  // Task Severity/Priority Breakdown Doughnut Chart data (counts tasks instead of risks, supports both views)
-  const pieData = useMemo(() => {
-    const tasksSource = userIsManager ? deptTasks : myTasks;
-    if (!tasksSource) return [];
-
-    const counts = { Critical: 0, High: 0, Medium: 0, Low: 0 };
-    tasksSource.forEach((t) => {
-      if (!t.priority) return;
-      const key = t.priority.charAt(0).toUpperCase() + t.priority.slice(1).toLowerCase();
-      if (counts[key] !== undefined) counts[key]++;
-    });
-
-    const totalCount = counts.Critical + counts.High + counts.Medium + counts.Low;
-    if (totalCount === 0) return [];
-    return [
-      { name: 'Critical', value: counts.Critical, color: '#ef4444' },
-      { name: 'High', value: counts.High, color: '#f97316' },
-      { name: 'Medium', value: counts.Medium, color: '#eab308' },
-      { name: 'Low', value: counts.Low, color: '#22c55e' },
-    ];
-  }, [deptTasks, myTasks, userIsManager]);
-
-  // Manager Chart: Line Chart Task Velocity (configurable days, defaults to 15)
-  const lineData = useMemo(() => {
-    if (!deptTasks) return [];
+  const upNextTasks = useMemo(() => {
+    if (!myTasks) return [];
     const today = new Date();
-    const data = [];
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+    const nextWeek = new Date(today);
+    nextWeek.setDate(today.getDate() + 7);
 
-    for (let i = taskVelocityDays - 1; i >= 0; i--) {
-      const date = new Date(today);
-      date.setDate(today.getDate() - i);
-      date.setHours(23, 59, 59, 999);
+    return myTasks.filter((t) => {
+      if (t.status === 'Closed') return false;
+      if (!t.due_date) return false;
+      const d = new Date(t.due_date);
+      return d >= tomorrow && d <= nextWeek;
+    });
+  }, [myTasks]);
 
-      // Cumulative tasks created up to this date
-      const created = deptTasks.filter(
-        (t) => new Date(t.created_at || Date.now()) <= date
-      ).length;
-
-      // Cumulative tasks closed up to this date
-      const completed = deptTasks.filter((t) => {
-        if (t.status === 'Closed') {
-          const creationDate = new Date(t.created_at || Date.now());
-          return creationDate <= date;
-        }
-        return false;
-      }).length;
-
-      // Cumulative tasks in progress up to this date
-      const inProgress = deptTasks.filter((t) => {
-        if (t.status === 'In Progress') {
-          const creationDate = new Date(t.created_at || Date.now());
-          return creationDate <= date;
-        }
-        return false;
-      }).length;
-
-      data.push({
-        dateStr: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-        Created: created,
-        Completed: completed,
-        'In Progress': inProgress,
-      });
-    }
-    return data;
-  }, [deptTasks, taskVelocityDays]);
+  const completedTasksCount = useMemo(() => {
+    if (!myTasks) return 0;
+    return myTasks.filter(t => t.status === 'Closed').length;
+  }, [myTasks]);
 
   // Manager Table: Filtered Backlog
   const filteredBacklog = useMemo(() => {
     if (!deptTasks) return [];
-    return deptTasks.filter((t) => {
-      if (!selectedUserFilter) return true;
+    let list = deptTasks;
+    
+    if (selectedUserFilter) {
       if (selectedUserFilter === 'Unassigned') {
-        return t.owner === 'Unassigned' || !t.owner;
-      }
-
-      const selUserLower = selectedUserFilter.toLowerCase();
-      const selUserFirstName = selectedUserFilter.trim().split(/\s+/)[0].toLowerCase();
-
-      // Check owners_list first
-      if (Array.isArray(t.owners_list)) {
-        const matchesList = t.owners_list.some((o) => {
-          if (!o) return false;
-          const oLower = String(o).trim().toLowerCase();
-          return oLower === selUserLower || oLower === selUserFirstName;
+        list = list.filter(t => t.owner === 'Unassigned' || !t.owner);
+      } else {
+        const selUserLower = selectedUserFilter.toLowerCase();
+        const selUserFirstName = selectedUserFilter.trim().split(/\s+/)[0].toLowerCase();
+        list = list.filter((t) => {
+          if (Array.isArray(t.owners_list)) {
+            const matchesList = t.owners_list.some((o) => {
+              if (!o) return false;
+              const oLower = String(o).trim().toLowerCase();
+              return oLower === selUserLower || oLower === selUserFirstName;
+            });
+            if (matchesList) return true;
+          }
+          if (!t.owner) return false;
+          const ownerLower = String(t.owner).trim().toLowerCase();
+          return (
+            ownerLower === selUserLower ||
+            ownerLower === selUserFirstName ||
+            ownerLower.includes(selUserLower) ||
+            ownerLower.includes(selUserFirstName)
+          );
         });
-        if (matchesList) return true;
       }
+    }
 
-      if (!t.owner) return false;
-      const ownerLower = String(t.owner).trim().toLowerCase();
-      return (
-        ownerLower === selUserLower ||
-        ownerLower === selUserFirstName ||
-        ownerLower.includes(selUserLower) ||
-        ownerLower.includes(selUserFirstName)
-      );
-    });
-  }, [deptTasks, selectedUserFilter]);
+    if (cardFilter === 'requires-attention') {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      list = list.filter(t => {
+        const isOverdue = (t.status === 'Open' || t.status === 'In Progress') && t.due_date && new Date(t.due_date) < today;
+        const isCritical = t.priority === 'Critical';
+        return isOverdue || isCritical;
+      });
+    } else if (cardFilter === 'unassigned') {
+      list = list.filter(t => t.owner === 'Unassigned' || !t.owner);
+    }
+
+    return list;
+  }, [deptTasks, selectedUserFilter, cardFilter]);
 
   // Sorting for Backlog
   const sortedBacklog = useMemo(() => {
@@ -548,21 +568,20 @@ export default function DashboardPage() {
             const currentMeeting = activeMeetings.find(m => m.id === selectedActiveMeetingId) || activeMeetings[0];
             return (
               <div 
-                className="glass-card" 
                 style={{ 
                   padding: '12px 18px', 
-                  borderRadius: '12px', 
+                  borderRadius: '8px', 
                   display: 'flex', 
                   flexDirection: 'column', 
                   gap: '8px', 
                   minWidth: '320px', 
                   border: '1px solid var(--border-primary)',
                   boxShadow: 'var(--shadow-card)',
-                  background: 'linear-gradient(135deg, var(--bg-secondary), var(--bg-tertiary))'
+                  background: 'var(--bg-secondary)'
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-primary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                     Upcoming Meet
                   </span>
                   
@@ -606,12 +625,11 @@ export default function DashboardPage() {
                     href={currentMeeting.google_meet_link}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="upload-submit-btn"
                     style={{
                       padding: '6px 12px',
                       borderRadius: '6px',
                       background: 'var(--accent-primary)',
-                      color: '#fff',
+                      color: 'var(--accent-primary-text)',
                       fontSize: '12px',
                       fontWeight: 600,
                       textDecoration: 'none',
@@ -619,9 +637,6 @@ export default function DashboardPage() {
                       alignItems: 'center',
                       justifyContent: 'center',
                       gap: '4px',
-                      width: 'auto',
-                      height: 'auto',
-                      margin: 0
                     }}
                   >
                     Join Google Meet ↗
@@ -651,50 +666,6 @@ export default function DashboardPage() {
               </div>
             );
           })()}
-
-          {/* Schedule Meet Button */}
-          <button
-            onClick={() => {
-              if (googleConnected) {
-                setShowScheduleModal(true);
-              } else {
-                const width = 600;
-                const height = 700;
-                const left = window.screen.width / 2 - width / 2;
-                const top = window.screen.height / 2 - height / 2;
-                window.open(
-                  `/api/auth/google/login?user_id=${user?.id}`,
-                  'Google OAuth Connect',
-                  `width=${width},height=${height},left=${left},top=${top}`
-                );
-              }
-            }}
-            className="upload-submit-btn"
-            style={{
-              padding: '10px 18px',
-              borderRadius: '8px',
-              border: 'none',
-              background: 'linear-gradient(135deg, hsl(250, 91%, 55%), hsl(280, 80%, 60%))',
-              color: '#ffffff',
-              fontSize: '13px',
-              fontWeight: 600,
-              cursor: 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              boxShadow: '0 4px 14px rgba(99, 102, 241, 0.25)',
-              margin: 0,
-              width: 'auto'
-            }}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-              <line x1="16" y1="2" x2="16" y2="6" />
-              <line x1="8" y1="2" x2="8" y2="6" />
-              <line x1="3" y1="10" x2="21" y2="10" />
-            </svg>
-            Schedule Meet
-          </button>
         </div>
       </div>
 
@@ -703,165 +674,100 @@ export default function DashboardPage() {
           ───────────────────────────────────────────────────────────── */}
       {!userIsManager && (
         <>
-          {/* Top Row: Task Completion Rate & Severity Breakdown */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 24, marginBottom: 32 }}>
-            {/* Task Completion Rate Card */}
-            <div className="glass-card" style={{ padding: '24px', display: 'flex', flexDirection: 'column', height: 360 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: '1px solid var(--border-subtle)', paddingBottom: 12, marginBottom: 20 }}>
-                Task Completion Rate
+          {/* Top Row: Focus Cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '20px', marginBottom: '32px' }}>
+            {/* Due Today / Overdue Card */}
+            <div
+              onClick={() => setMemberCardFilter(memberCardFilter === 'immediate' ? null : 'immediate')}
+              style={{
+                padding: '20px',
+                background: 'var(--bg-secondary)',
+                border: memberCardFilter === 'immediate' ? '1.5px solid var(--text-primary)' : '1px solid var(--border-primary)',
+                borderRadius: '12px',
+                boxShadow: 'var(--shadow-card)',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease'
+              }}
+              onMouseOver={(e) => e.currentTarget.style.borderColor = 'var(--text-secondary)'}
+              onMouseOut={(e) => e.currentTarget.style.borderColor = memberCardFilter === 'immediate' ? 'var(--text-primary)' : 'var(--border-primary)'}
+            >
+              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Due Today / Overdue
               </div>
-              <div style={{ display: 'flex', flex: 1, flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 24 }}>
-                <div style={{ position: 'relative', width: 110, height: 110 }}>
-                  <svg viewBox="0 0 36 36" style={{ width: '100%', height: '100%' }}>
-                    <path
-                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                      fill="none" stroke="var(--border-primary)" strokeWidth="3"
-                    />
-                    <path
-                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                      fill="none" stroke="var(--accent-primary)" strokeWidth="3"
-                      strokeDasharray={`${memberKPIs.completionRate}, 100`}
-                    />
-                  </svg>
-                  <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, fontWeight: 800, color: 'var(--text-primary)' }}>
-                    {memberKPIs.completionRate}%
-                  </div>
-                </div>
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--text-primary)' }}>
-                    {memberKPIs.closed} <span style={{ fontSize: 16, fontWeight: 500, color: 'var(--text-secondary)' }}>/ {memberKPIs.total}</span>
-                  </div>
-                  <div style={{ fontSize: 13, color: 'var(--text-tertiary)', marginTop: 4 }}>Completed vs Total Tasks</div>
-                </div>
+              <div style={{ fontSize: '32px', fontWeight: 800, color: 'var(--color-critical-text)', marginTop: '8px' }}>
+                {immediateTasks.length}
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                Immediate action items
               </div>
             </div>
 
-            {/* Severity Breakdown Card */}
-            <div className="glass-card" style={{ padding: 24, display: 'flex', flexDirection: 'column', height: 360 }}>
-              <div className="section-header" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: 12, marginBottom: 16 }}>
-                <span className="section-title">
-                  My Tasks Severity Breakdown
-                </span>
+            {/* Up Next Card */}
+            <div
+              onClick={() => setMemberCardFilter(memberCardFilter === 'up-next' ? null : 'up-next')}
+              style={{
+                padding: '20px',
+                background: 'var(--bg-secondary)',
+                border: memberCardFilter === 'up-next' ? '1.5px solid var(--text-primary)' : '1px solid var(--border-primary)',
+                borderRadius: '12px',
+                boxShadow: 'var(--shadow-card)',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease'
+              }}
+              onMouseOver={(e) => e.currentTarget.style.borderColor = 'var(--text-secondary)'}
+              onMouseOut={(e) => e.currentTarget.style.borderColor = memberCardFilter === 'up-next' ? 'var(--text-primary)' : 'var(--border-primary)'}
+            >
+              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Up Next
               </div>
-              <div style={{ flex: 1, minHeight: 0 }}>
-                {mounted && (
-                  pieData.length === 0 ? (
-                    <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-tertiary)', fontSize: 13 }}>
-                      No tasks assigned to you.
-                    </div>
-                  ) : (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={pieData}
-                          cx="50%"
-                          cy="45%"
-                          innerRadius={60}
-                          outerRadius={90}
-                          paddingAngle={5}
-                          dataKey="value"
-                        >
-                          {pieData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={entry.color} />
-                          ))}
-                        </Pie>
-                        <Tooltip
-                          contentStyle={{
-                            background: 'var(--bg-secondary)',
-                            borderColor: 'var(--border-primary)',
-                            borderRadius: '8px',
-                            color: 'var(--text-primary)'
-                          }}
-                          itemStyle={{ color: 'var(--text-primary)' }}
-                          labelStyle={{ color: 'var(--text-secondary)', fontWeight: 600 }}
-                          formatter={(value) => [`${value} Tasks`, 'Count']}
-                        />
-                        <Legend verticalAlign="bottom" height={36} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  )
-                )}
+              <div style={{ fontSize: '32px', fontWeight: 800, color: 'var(--text-primary)', marginTop: '8px' }}>
+                {upNextTasks.length}
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                Due this week (next 7 days)
+              </div>
+            </div>
+
+            {/* Completed Card */}
+            <div
+              onClick={() => setMemberCardFilter(memberCardFilter === 'completed' ? null : 'completed')}
+              style={{
+                padding: '20px',
+                background: 'var(--bg-secondary)',
+                border: memberCardFilter === 'completed' ? '1.5px solid var(--text-primary)' : '1px solid var(--border-primary)',
+                borderRadius: '12px',
+                boxShadow: 'var(--shadow-card)',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease'
+              }}
+              onMouseOver={(e) => e.currentTarget.style.borderColor = 'var(--text-secondary)'}
+              onMouseOut={(e) => e.currentTarget.style.borderColor = memberCardFilter === 'completed' ? 'var(--text-primary)' : 'var(--border-primary)'}
+            >
+              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Completed
+              </div>
+              <div style={{ fontSize: '32px', fontWeight: 800, color: 'var(--color-success-text)', marginTop: '8px' }}>
+                {completedTasksCount}
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                Weekly task completion count
               </div>
             </div>
           </div>
 
-          {/* Bottom Row: Top 4 Next Actionable Tasks */}
-          <div className="glass-card" style={{ padding: 24, display: 'flex', flexDirection: 'column', marginBottom: 32 }}>
-            <div className="section-header" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: 12, marginBottom: 20 }}>
-              <span className="section-title">
-                Next Actionable Tasks
-              </span>
-            </div>
-            {sortedMyTasks.filter(t => t.status !== 'Closed').length === 0 ? (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 120, color: 'var(--text-tertiary)', fontSize: 13 }}>
-                No upcoming actionable tasks. All caught up!
-              </div>
-            ) : (
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
-                gap: 20,
-                alignItems: 'start'
-              }}>
-                {sortedMyTasks.filter(t => t.status !== 'Closed').slice(0, 4).map((t) => {
-                  const mtg = meetings?.find((m) => m.id === t.meeting_id);
-                  return (
-                    <div key={t.id} style={{
-                      padding: '16px',
-                      border: '1px solid var(--border-primary)',
-                      borderRadius: 12,
-                      background: 'var(--bg-tertiary)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 12,
-                      boxShadow: 'var(--shadow-card)',
-                      transition: 'transform 0.2s ease, box-shadow 0.2s ease'
-                    }}
-                      className="hover-card-effect"
-                    >
-                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1.5 }}>
-                        {t.task_description}
-                      </div>
-
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, borderTop: '1px solid var(--border-subtle)', paddingTop: 10 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11 }}>
-                          <span style={{ color: 'var(--text-tertiary)' }}>
-                            Due: {formatDate(t.due_date)}
-                          </span>
-                        </div>
-
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
-                          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                            <PriorityBadge level={t.priority} />
-                            <StatusBadge status={t.status} />
-                          </div>
-                          {mtg && (
-                            <Link href={`/meetings/${mtg.id}`} style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-accent)' }}>
-                              Source ↗
-                            </Link>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Member Tasks Table */}
+          {/* Member Tasks List View */}
           <div className="section-header" style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
             <span className="section-title">
-              My Assigned Action Items
+              My Assigned Tasks
               <span style={{ fontSize: 12, color: 'var(--text-secondary)', marginLeft: 12, fontWeight: 500 }}>
-                ({myTasks.length} total)
+                ({sortedMyTasks.length} shown)
               </span>
             </span>
             <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
               <select
                 value={groupBy}
                 onChange={(e) => setGroupBy(e.target.value)}
-                style={{ background: 'var(--bg-input)', border: '1px solid var(--border-primary)', padding: '6px 12px', borderRadius: '6px', fontSize: 13, color: 'var(--text-primary)', outline: 'none' }}
+                style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-charcoal)', padding: '6px 12px', borderRadius: '8px', fontSize: 13, color: 'var(--text-primary)', outline: 'none', cursor: 'pointer' }}
               >
                 <option value="none">Group By: None</option>
                 <option value="category">Group By: Category</option>
@@ -871,7 +777,7 @@ export default function DashboardPage() {
               <select
                 value={sortMode}
                 onChange={(e) => setSortMode(e.target.value)}
-                style={{ background: 'var(--bg-input)', border: '1px solid var(--border-primary)', padding: '6px 12px', borderRadius: '6px', fontSize: 13, color: 'var(--text-primary)', outline: 'none' }}
+                style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-charcoal)', padding: '6px 12px', borderRadius: '8px', fontSize: 13, color: 'var(--text-primary)', outline: 'none', cursor: 'pointer' }}
               >
                 <option value="smart">Sort: Smart (AI Urgency)</option>
                 <option value="priority-desc">Sort: Priority (Critical first)</option>
@@ -882,15 +788,15 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {myTasks.length === 0 ? (
+          {sortedMyTasks.length === 0 ? (
             <EmptyState
               icon="🎉"
               title="All caught up!"
-              text="No open tasks assigned to you in this department."
+              text="No tasks match the active filters or focus cards."
               style={{ marginBottom: 32 }}
             />
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 32, marginBottom: 32 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 24, marginBottom: 32 }}>
               {Object.keys(groupedMyTasks).map((groupKey) => {
                 let icon = '📁';
                 if (groupBy === 'category') {
@@ -902,15 +808,14 @@ export default function DashboardPage() {
                   icon = '🎬';
                 }
                 return (
-                  <div key={groupKey} className="data-table-wrapper" style={{ border: '1px solid var(--border-primary)', boxShadow: 'var(--shadow-elevated)' }}>
+                  <div key={groupKey} style={{ border: '1px solid var(--border-primary)', borderRadius: '12px', background: 'var(--bg-secondary)', overflow: 'hidden', boxShadow: 'var(--shadow-card)' }}>
                     {groupBy !== 'none' && (
                       <div style={{
                         padding: '14px 20px',
                         background: 'var(--bg-tertiary)',
                         borderBottom: '1px solid var(--border-primary)',
-                        borderLeft: '4px solid var(--accent-primary)',
                         fontWeight: 700,
-                        fontSize: '14px',
+                        fontSize: '13px',
                         color: 'var(--text-primary)',
                         display: 'flex',
                         alignItems: 'center',
@@ -922,75 +827,90 @@ export default function DashboardPage() {
                         </div>
                         <span style={{
                           background: 'var(--accent-primary-glow)',
-                          color: 'var(--text-accent)',
-                          padding: '3px 10px',
+                          color: 'var(--text-primary)',
+                          padding: '2px 8px',
                           borderRadius: '20px',
                           fontSize: '11px',
-                          fontWeight: 700
+                          fontWeight: 600
                         }}>
                           {groupedMyTasks[groupKey].length} {groupedMyTasks[groupKey].length === 1 ? 'task' : 'tasks'}
                         </span>
                       </div>
                     )}
-                    <table className="data-table">
-                      <thead>
-                        <tr>
-                          <th>Task</th>
-                          <th>Meeting Source</th>
-                          <th>Deadline</th>
-                          <th>Priority</th>
-                          <th>Status</th>
-                          <th style={{ textAlign: 'right' }}>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {groupedMyTasks[groupKey].map((t) => {
-                          const mtg = meetings?.find((m) => m.id === t.meeting_id);
-                          return (
-                            <tr key={t.id}>
-                              <td className="td-description">{t.task_description}</td>
-                              <td>
-                                {mtg ? (
-                                  <Link href={`/meetings/${mtg.id}`} style={{ fontWeight: 500 }}>
-                                    {mtg.title || mtg.file_name}
-                                  </Link>
-                                ) : (
-                                  '-'
-                                )}
-                              </td>
-                              <td className="td-date">{formatDate(t.due_date)}</td>
-                              <td>
-                                <PriorityBadge level={t.priority} />
-                              </td>
-                              <td>
-                                <StatusBadge status={t.status} />
-                              </td>
-                              <td style={{ textAlign: 'right' }}>
-                                <select
-                                  value={t.status}
-                                  onChange={(e) => handleStatusChange(t.id, e.target.value)}
-                                  style={{
-                                    background: t.status === 'Closed' ? 'rgba(34, 197, 94, 0.1)' : t.status === 'In Progress' ? 'hsla(45, 93%, 47%, 0.1)' : 'var(--bg-input)',
-                                    color: t.status === 'Closed' ? '#22c55e' : t.status === 'In Progress' ? 'hsl(45, 93%, 40%)' : 'var(--text-primary)',
-                                    border: `1px solid ${t.status === 'Closed' ? 'rgba(34, 197, 94, 0.2)' : t.status === 'In Progress' ? 'hsla(45, 93%, 47%, 0.2)' : 'var(--border-primary)'}`,
-                                    cursor: 'pointer',
-                                    padding: '6px 12px',
-                                    borderRadius: '6px',
-                                    fontSize: '12px',
-                                    fontWeight: 500,
-                                    outline: 'none',
-                                  }}
-                                >
-                                  <option value="Open">Open</option>
-                                  <option value="In Progress">In Progress</option>
-                                  <option value="Closed">Closed</option>
-                                </select>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                      {groupedMyTasks[groupKey].map((t) => {
+                        const mtg = meetings?.find((m) => m.id === t.meeting_id);
+                        return (
+                          <div key={t.id} style={{
+                            padding: '16px 20px',
+                            borderBottom: '1px solid var(--border-primary)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '24px',
+                            transition: 'background var(--transition-fast)',
+                            cursor: 'default'
+                          }}
+                          onMouseOver={(e) => e.currentTarget.style.background = 'var(--bg-card-hover)'}
+                          onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px', flex: 1, minWidth: 0 }}>
+
+
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: 0 }}>
+                                <span style={{
+                                  fontSize: '14px',
+                                  fontWeight: 500,
+                                  color: 'var(--text-primary)',
+                                  textDecoration: t.status === 'Closed' ? 'line-through' : 'none',
+                                  opacity: t.status === 'Closed' ? 0.6 : 1,
+                                  lineHeight: '1.4'
+                                }}>
+                                  {t.task_description}
+                                </span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', fontSize: '11px', color: 'var(--text-tertiary)' }}>
+                                  {mtg && (
+                                    <Link href={`/meetings/${mtg.id}`} style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
+                                      {mtg.title || mtg.file_name} ↗
+                                    </Link>
+                                  )}
+                                  {t.due_date && (
+                                    <span>Due: {formatDate(t.due_date)}</span>
+                                  )}
+                                  <span style={{ textTransform: 'capitalize' }}>Category: {t.category}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
+                              <PriorityBadge level={t.priority} />
+                              <StatusBadge status={t.status} />
+
+                              {/* Dropdown status changer */}
+                              <select
+                                value={t.status}
+                                onChange={(e) => handleStatusChange(t.id, e.target.value)}
+                                style={{
+                                  background: t.status === 'Closed' ? 'var(--color-success-bg)' : t.status === 'In Progress' ? 'var(--color-medium-bg)' : 'var(--bg-input)',
+                                  color: t.status === 'Closed' ? 'var(--color-success-text)' : t.status === 'In Progress' ? 'var(--color-medium-text)' : 'var(--text-primary)',
+                                  border: '1px solid var(--border-primary)',
+                                  cursor: 'pointer',
+                                  padding: '4px 8px',
+                                  borderRadius: '6px',
+                                  fontSize: '11px',
+                                  fontWeight: 500,
+                                  outline: 'none',
+                                }}
+                              >
+                                <option value="Open">Open</option>
+                                <option value="In Progress">In Progress</option>
+                                <option value="Closed">Closed</option>
+                              </select>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 );
               })}
@@ -1004,187 +924,86 @@ export default function DashboardPage() {
           ───────────────────────────────────────────────────────────── */}
       {userIsManager && (
         <>
-          {/* Visual Analytics */}
-          <div className="charts-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 24, marginBottom: 32 }}>
-            {/* Task Severity Breakdown Doughnut */}
-            <div className="glass-card" style={{ padding: 24, display: 'flex', flexDirection: 'column', height: 380 }}>
-              <div className="section-header" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: 12, marginBottom: 16 }}>
-                <span className="section-title">
-                  Task Severity Breakdown
-                </span>
+          {/* Actionable Overview Cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '20px', marginBottom: '32px' }}>
+            {/* Requires Attention Card */}
+            <div
+              onClick={() => setCardFilter(cardFilter === 'requires-attention' ? null : 'requires-attention')}
+              style={{
+                padding: '20px',
+                background: 'var(--bg-secondary)',
+                border: cardFilter === 'requires-attention' ? '1.5px solid var(--text-primary)' : '1px solid var(--border-primary)',
+                borderRadius: '12px',
+                boxShadow: 'var(--shadow-card)',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease'
+              }}
+              onMouseOver={(e) => e.currentTarget.style.borderColor = 'var(--text-secondary)'}
+              onMouseOut={(e) => e.currentTarget.style.borderColor = cardFilter === 'requires-attention' ? 'var(--text-primary)' : 'var(--border-primary)'}
+            >
+              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Requires Attention
               </div>
-              <div style={{ flex: 1, minHeight: 0 }}>
-                {mounted && (
-                  pieData.length === 0 ? (
-                    <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-tertiary)', fontSize: 13 }}>
-                      No tasks detected in department.
-                    </div>
-                  ) : (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={pieData}
-                          cx="50%"
-                          cy="45%"
-                          innerRadius={60}
-                          outerRadius={90}
-                          paddingAngle={5}
-                          dataKey="value"
-                        >
-                          {pieData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={entry.color} />
-                          ))}
-                        </Pie>
-                        <Tooltip
-                          contentStyle={{
-                            background: 'var(--bg-secondary)',
-                            borderColor: 'var(--border-primary)',
-                            borderRadius: '8px',
-                            color: 'var(--text-primary)'
-                          }}
-                          itemStyle={{ color: 'var(--text-primary)' }}
-                          labelStyle={{ color: 'var(--text-secondary)', fontWeight: 600 }}
-                          formatter={(value) => [`${value} Tasks`, 'Count']}
-                        />
-                        <Legend verticalAlign="bottom" height={36} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  )
-                )}
+              <div style={{ fontSize: '32px', fontWeight: 800, color: 'var(--color-critical-text)', marginTop: '8px' }}>
+                {requiresAttentionCount}
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                {overdueTasksCount} overdue tasks + {criticalRisksCount} critical risks
               </div>
             </div>
 
-            {/* Task Velocity Line Chart */}
-            <div className="glass-card" style={{ padding: 24, display: 'flex', flexDirection: 'column', height: 380 }}>
-              <div className="section-header" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: 12, marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span className="section-title">
-                  Task Velocity <span style={{ fontWeight: 400, fontSize: '13px', marginLeft: '6px', color: 'var(--text-secondary)' }}>(Last {taskVelocityDays} days)</span>
-                </span>
-                <select
-                  value={taskVelocityDays}
-                  onChange={(e) => setTaskVelocityDays(Number(e.target.value))}
-                  style={{
-                    background: 'var(--bg-secondary)',
-                    border: '1px solid var(--border-primary)',
-                    color: 'var(--text-primary)',
-                    borderRadius: '6px',
-                    padding: '4px 8px',
-                    fontSize: '12px',
-                    outline: 'none',
-                    cursor: 'pointer'
-                  }}
-                >
-                  <option value={10}>Last 10 Days</option>
-                  <option value={15}>Last 15 Days</option>
-                  <option value={30}>Last 30 Days</option>
-                </select>
+            {/* Unassigned Action Items Card */}
+            <div
+              onClick={() => setCardFilter(cardFilter === 'unassigned' ? null : 'unassigned')}
+              style={{
+                padding: '20px',
+                background: 'var(--bg-secondary)',
+                border: cardFilter === 'unassigned' ? '1.5px solid var(--text-primary)' : '1px solid var(--border-primary)',
+                borderRadius: '12px',
+                boxShadow: 'var(--shadow-card)',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease'
+              }}
+              onMouseOver={(e) => e.currentTarget.style.borderColor = 'var(--text-secondary)'}
+              onMouseOut={(e) => e.currentTarget.style.borderColor = cardFilter === 'unassigned' ? 'var(--text-primary)' : 'var(--border-primary)'}
+            >
+              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Unassigned Tasks
               </div>
-              <div style={{ flex: 1, minHeight: 0 }}>
-                {mounted && (
-                  deptTasks.length === 0 ? (
-                    <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-tertiary)', fontSize: 13 }}>
-                      No tasks available to track velocity.
-                    </div>
-                  ) : (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={lineData} margin={{ right: 10, left: -15 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
-                        <XAxis dataKey="dateStr" stroke="var(--text-tertiary)" fontSize={11} tickCount={6} />
-                        <YAxis stroke="var(--text-tertiary)" fontSize={11} allowDecimals={false} axisLine={false} tickLine={false} />
-                        <Tooltip
-                          contentStyle={{
-                            background: 'var(--bg-secondary)',
-                            borderColor: 'var(--border-primary)',
-                            borderRadius: '8px',
-                            color: 'var(--text-primary)'
-                          }}
-                          itemStyle={{ color: 'var(--text-primary)' }}
-                          labelStyle={{ color: 'var(--text-secondary)', fontWeight: 600 }}
-                          formatter={(value, name) => [`${value} Tasks`, name]}
-                        />
-                        <Legend />
-                        <Line type="monotone" dataKey="Created" stroke="hsl(250, 80%, 60%)" strokeWidth={2.5} dot={false} activeDot={{ r: 6 }} />
-                        <Line type="monotone" dataKey="In Progress" stroke="#f97316" strokeWidth={2.5} dot={false} />
-                        <Line type="monotone" dataKey="Completed" stroke="#22c55e" strokeWidth={2.5} dot={false} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  )
-                )}
+              <div style={{ fontSize: '32px', fontWeight: 800, color: 'var(--text-primary)', marginTop: '8px' }}>
+                {unassignedTasksCount}
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                Tasks needing designated owners
               </div>
             </div>
-          </div>
 
-          {/* Top 8 Next Actionable Tasks Card */}
-          <div className="glass-card" style={{ padding: 24, display: 'flex', flexDirection: 'column', marginBottom: 32 }}>
-            <div className="section-header" style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: 12, marginBottom: 20 }}>
-              <span className="section-title">
-                Top 8 Next Actionable Tasks
-              </span>
+            {/* Meetings Processed This Week */}
+            <div
+              style={{
+                padding: '20px',
+                background: 'var(--bg-secondary)',
+                border: '1px solid var(--border-primary)',
+                borderRadius: '12px',
+                boxShadow: 'var(--shadow-card)'
+              }}
+            >
+              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Processed This Week
+              </div>
+              <div style={{ fontSize: '32px', fontWeight: 800, color: 'var(--text-primary)', marginTop: '8px' }}>
+                {meetingsThisWeekCount}
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                Meetings processed in the last 7 days
+              </div>
             </div>
-            {next8ActionableTasks.length === 0 ? (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 120, color: 'var(--text-tertiary)', fontSize: 13 }}>
-                No upcoming actionable tasks. All caught up!
-              </div>
-            ) : (
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-                gap: 20,
-                alignItems: 'start'
-              }}>
-                {next8ActionableTasks.map((t) => {
-                  const mtg = meetings?.find((m) => m.id === t.meeting_id);
-                  return (
-                    <div key={t.id} style={{
-                      padding: '16px',
-                      border: '1px solid var(--border-primary)',
-                      borderRadius: 12,
-                      background: 'var(--bg-tertiary)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 12,
-                      boxShadow: 'var(--shadow-card)',
-                      transition: 'transform 0.2s ease, box-shadow 0.2s ease'
-                    }}
-                      className="hover-card-effect"
-                    >
-                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1.5 }}>
-                        {t.task_description}
-                      </div>
-
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, borderTop: '1px solid var(--border-subtle)', paddingTop: 10 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11 }}>
-                          <span style={{ color: 'var(--text-secondary)' }}>
-                            Owner: <strong>{t.owner}</strong>
-                          </span>
-                          <span style={{ color: 'var(--text-tertiary)' }}>
-                            Due: {formatDate(t.due_date)}
-                          </span>
-                        </div>
-
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
-                          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                            <PriorityBadge level={t.priority} />
-                            <StatusBadge status={t.status} />
-                          </div>
-                          {mtg && (
-                            <Link href={`/meetings/${mtg.id}`} style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-accent)' }}>
-                              Source ↗
-                            </Link>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
           </div>
 
           {/* Team Backlog Table */}
           <div className="section-header" style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
             <span className="section-title">
-              Team Backlog
+              Department Action Items
               <span style={{ fontSize: 12, color: 'var(--text-secondary)', marginLeft: 12, fontWeight: 500 }}>
                 ({filteredBacklog.length} total)
               </span>
@@ -1193,7 +1012,7 @@ export default function DashboardPage() {
               <select
                 value={groupBy}
                 onChange={(e) => setGroupBy(e.target.value)}
-                style={{ background: 'var(--bg-input)', border: '1px solid var(--border-primary)', padding: '6px 12px', borderRadius: '6px', fontSize: 13, color: 'var(--text-primary)', outline: 'none' }}
+                style={{ background: 'var(--bg-input)', border: '1px solid var(--border-charcoal)', padding: '6px 12px', borderRadius: '6px', fontSize: 13, color: 'var(--text-primary)', outline: 'none' }}
               >
                 <option value="none">Group By: None</option>
                 <option value="category">Group By: Category</option>
@@ -1203,7 +1022,7 @@ export default function DashboardPage() {
               <select
                 value={sortMode}
                 onChange={(e) => setSortMode(e.target.value)}
-                style={{ background: 'var(--bg-input)', border: '1px solid var(--border-primary)', padding: '6px 12px', borderRadius: '6px', fontSize: 13, color: 'var(--text-primary)', outline: 'none' }}
+                style={{ background: 'var(--bg-input)', border: '1px solid var(--border-charcoal)', padding: '6px 12px', borderRadius: '6px', fontSize: 13, color: 'var(--text-primary)', outline: 'none' }}
               >
                 <option value="smart">Sort: Smart (AI Urgency)</option>
                 <option value="priority-desc">Sort: Priority (Critical first)</option>
@@ -1218,7 +1037,7 @@ export default function DashboardPage() {
                 onChange={(e) => setSelectedUserFilter(e.target.value)}
                 style={{
                   background: 'var(--bg-secondary)',
-                  border: '1px solid var(--border-primary)',
+                  border: '1px solid var(--border-charcoal)',
                   color: 'var(--text-primary)',
                   borderRadius: '8px',
                   padding: '6px 12px',

@@ -18,7 +18,20 @@ export default function QueryWidget() {
   const [showBubble, setShowBubble] = useState(true);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+  const chatRef = useRef(null);
   const { organization, user } = useAuth();
+
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (chatRef.current && !chatRef.current.contains(event.target)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -157,7 +170,7 @@ export default function QueryWidget() {
   };
 
   return (
-    <>
+    <div ref={chatRef}>
       {/* Welcome Bubble */}
       {showBubble && !open && (
         <div className="query-bubble-tooltip">
@@ -266,7 +279,7 @@ export default function QueryWidget() {
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }
 

@@ -124,3 +124,29 @@ export async function fetchLatestGoogleMeetings(organizationId, userId) {
   const data = await res.json();
   return data.meetings || [];
 }
+
+export async function deleteMeeting(meetingId, organizationId) {
+  const res = await fetch(`${API_BASE}/meetings/${meetingId}?organization_id=${organizationId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.detail || 'Failed to delete meeting');
+  }
+  return res.json();
+}
+
+export async function deleteTasksBulk(taskIds) {
+  if (!taskIds || taskIds.length === 0) throw new Error('No task IDs provided');
+  const res = await fetch(`${API_BASE}/tasks/bulk`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task_ids: taskIds }),
+  });
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.detail || 'Failed to bulk delete tasks');
+  }
+  return res.json();
+}
+

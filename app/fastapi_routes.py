@@ -34,6 +34,8 @@ from app.database_session import async_session_factory
 from app.database_service import (
     add_meeting_team_association,
     delete_meeting,
+    delete_task,
+    delete_tasks_bulk,
     get_all_meetings,
     get_all_risks,
     get_all_tasks,
@@ -238,6 +240,22 @@ async def get_meeting_status(meeting_id: str, organization_id: str = Query(...))
     return {"status": meeting.get("status", "PENDING")}
 
 
+# ── Meetings — DELETE ─────────────────────────────────────────────────────────
+
+@router.delete("/meetings/{meeting_id}", summary="Permanently delete a meeting and all its tasks, risks, and summaries")
+async def delete_meeting_route(meeting_id: str, organization_id: str = Query(...)):
+    """Hard-deletes a meeting and cascades to tasks, risks, and transcripts."""
+    meeting = await get_meeting_by_id(meeting_id, organization_id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    try:
+        await delete_meeting(meeting_id)
+        return {"success": True, "message": "Meeting and all related data permanently deleted"}
+    except Exception as exc:
+        logger.error("Failed to delete meeting %s: %s", meeting_id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 # ── Tasks ─────────────────────────────────────────────────────────────────────
 
 @router.get("/tasks", summary="List tasks for an organisation (optionally filtered by meeting)")
@@ -267,6 +285,28 @@ async def update_task_status_route(task_id: str, payload: UpdateTaskStatusReques
         return {"status": "success", "message": f"Task status updated to '{payload.status}'"}
     except Exception as exc:
         logger.error("Failed to update task %s: %s", task_id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+class BulkDeleteTasksRequest(BaseModel):
+    """Request body for the bulk-delete tasks endpoint."""
+    task_ids: List[str] = Field(..., min_length=1, description="List of task IDs to permanently delete")
+
+
+@router.delete("/tasks/bulk", summary="Permanently delete multiple completed tasks")
+async def delete_tasks_bulk_route(payload: BulkDeleteTasksRequest):
+    """Bulk hard-delete tasks by ID list. Returns count of deleted rows."""
+    if not payload.task_ids:
+        raise HTTPException(status_code=400, detail="task_ids list cannot be empty")
+    try:
+        deleted_count = await delete_tasks_bulk(payload.task_ids)
+        return {
+            "success": True,
+            "deleted_count": deleted_count,
+            "message": f"{deleted_count} task(s) permanently deleted",
+        }
+    except Exception as exc:
+        logger.error("Failed to bulk delete tasks: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
 
 
