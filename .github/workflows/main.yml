@@ -1,0 +1,27 @@
+name: Trigger Render Deploys
+
+on:
+  push:
+    branches:
+      - Deployment
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger Render backend deploy webhook
+        env:
+          WEBHOOK: ${{ secrets.RENDER_MAGENT_DHOOK_BE }}
+        run: |
+          curl --fail --silent --show-error \
+            -X POST \
+            "$WEBHOOK"
+
+      - name: Trigger Render frontend deploy webhook
+        env:
+          WEBHOOK: ${{ secrets.RENDER_MAGENT_DHOOK_FE }}
+        run: |
+          curl --fail --silent --show-error \
+            -X POST \
+            "$WEBHOOK"
