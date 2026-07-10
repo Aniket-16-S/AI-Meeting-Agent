@@ -24,13 +24,13 @@ export default function SettingsLayout({ children }) {
   const menuItems = [
     {
       href: '/settings/users',
-      label: '👥 User Management',
+      label: 'User Management',
       active: pathname === '/settings/users',
       visible: true
     },
     {
       href: '/settings/departments',
-      label: '🏢 Department Management',
+      label: 'Department Management',
       active: pathname === '/settings/departments',
       visible: isOrgAdmin
     }
@@ -66,7 +66,7 @@ export default function SettingsLayout({ children }) {
               fontSize: '14px',
               fontWeight: item.active ? 600 : 500,
               background: item.active ? 'var(--accent-primary-glow)' : 'transparent',
-              color: item.active ? 'var(--text-accent)' : 'var(--text-secondary)',
+              color: 'var(--text-primary)',
               transition: 'all 0.2s',
               border: item.active ? '1px solid var(--border-glow)' : '1px solid transparent'
             }}

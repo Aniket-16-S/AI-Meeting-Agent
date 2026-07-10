@@ -4,7 +4,7 @@ import { useAuth } from '@/lib/AuthContext';
 import { useToast } from '@/components/Toast';
 
 export default function UserManagementPage() {
-  const { users, departments, createUser, user: currentUser } = useAuth();
+  const { users, departments, createUser, user: currentUser, deleteUserInContext, assignUserDepartmentInContext } = useAuth();
   const { addToast } = useToast();
 
   const [name, setName] = useState('');
@@ -12,6 +12,13 @@ export default function UserManagementPage() {
   const [password, setPassword] = useState('');
   const [role, setRole] = useState('employee');
   const [departmentId, setDepartmentId] = useState('');
+
+  // Delete User Modal States
+  const [deleteUserId, setDeleteUserId] = useState(null);
+  const [deleteUserName, setDeleteUserName] = useState('');
+  const [passwordConfirm, setPasswordConfirm] = useState('');
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -38,6 +45,44 @@ export default function UserManagementPage() {
     }
   };
 
+  const triggerDeleteUser = (userId, userName) => {
+    setDeleteUserId(userId);
+    setDeleteUserName(userName);
+    setPasswordConfirm('');
+    setShowDeleteModal(true);
+  };
+
+  const handleConfirmDeleteUser = async (e) => {
+    e.preventDefault();
+    if (!passwordConfirm.trim()) {
+      addToast('Password is required to delete users', 'warning');
+      return;
+    }
+
+    setIsDeleting(true);
+    try {
+      await deleteUserInContext(deleteUserId, passwordConfirm);
+      addToast(`User "${deleteUserName}" has been successfully deleted!`, 'success');
+      setShowDeleteModal(false);
+      window.location.reload();
+    } catch (err) {
+      addToast(err.message || 'Failed to delete user', 'error');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleAssignDepartment = async (userId, deptId) => {
+    if (!deptId) return;
+    try {
+      await assignUserDepartmentInContext(userId, deptId);
+      addToast('Department assigned successfully!', 'success');
+      window.location.reload();
+    } catch (err) {
+      addToast(err.message || 'Failed to assign department', 'error');
+    }
+  };
+
   // Filter users to current active organization
   const orgUsers = users.filter((u) => u.organizationId === currentUser?.organizationId);
 
@@ -50,7 +95,7 @@ export default function UserManagementPage() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
       <div>
-        <h2 style={{ fontSize: '22px', fontWeight: 700, color: 'var(--text-primary)' }}>👥 User Management</h2>
+        <h2 style={{ fontSize: '22px', fontWeight: 700, color: 'var(--text-primary)' }}>User Management</h2>
         <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '4px' }}>
           View team directory and register new employee accounts.
         </p>
@@ -69,6 +114,7 @@ export default function UserManagementPage() {
                   <th>Name</th>
                   <th>Role</th>
                   <th>Department</th>
+                  <th style={{ textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -93,7 +139,50 @@ export default function UserManagementPage() {
                       </span>
                     </td>
                     <td style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-                      {getDeptName(u.departmentId)}
+                      {getDeptName(u.departmentId) === 'Unknown' || !u.departmentId ? (
+                        <select
+                          defaultValue=""
+                          onChange={(e) => handleAssignDepartment(u.id, e.target.value)}
+                          style={{
+                            background: 'var(--bg-input)',
+                            border: '1px solid var(--border-primary)',
+                            color: 'var(--text-primary)',
+                            padding: '4px 8px',
+                            borderRadius: '6px',
+                            fontSize: '12px',
+                            outline: 'none',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <option value="" disabled>Assign Dept...</option>
+                          {departments.map((dept) => (
+                            <option key={dept.id} value={dept.id}>
+                              {dept.name}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        getDeptName(u.departmentId)
+                      )}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      {u.role !== 'admin' && (
+                        <button
+                          onClick={() => triggerDeleteUser(u.id, u.name)}
+                          style={{
+                            color: 'var(--color-critical-text)',
+                            background: 'var(--color-critical-bg)',
+                            border: '1px solid var(--color-critical-border)',
+                            padding: '4px 8px',
+                            borderRadius: '6px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Delete
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -221,7 +310,7 @@ export default function UserManagementPage() {
                 fontSize: '14px',
                 cursor: 'pointer',
                 textAlign: 'center',
-                boxShadow: '0 4px 12px hsla(217, 91%, 55%, 0.15)',
+                boxShadow: '0 4px 12px hsla(250, 91%, 55%, 0.15)',
                 marginTop: '6px'
               }}
             >
@@ -229,8 +318,98 @@ export default function UserManagementPage() {
             </button>
           </form>
         </div>
-
       </div>
+
+      {showDeleteModal && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0, 0, 0, 0.4)',
+          backdropFilter: 'blur(8px)',
+          WebkitBackdropFilter: 'blur(8px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 10000,
+          animation: 'fadeIn 0.25s ease'
+        }}>
+          <div className="glass-card" style={{
+            width: '100%',
+            maxWidth: '420px',
+            padding: '28px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '20px',
+            boxShadow: 'var(--shadow-elevated)',
+            border: '1px solid var(--border-primary)',
+            background: 'var(--bg-secondary)'
+          }}>
+            <div>
+              <h3 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '8px' }}>
+                Confirm Account Deletion
+              </h3>
+              <p style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                Are you sure you want to delete user <strong>{deleteUserName}</strong>? This action cannot be undone. Please enter your administrator password to authenticate:
+              </p>
+            </div>
+
+            <form onSubmit={handleConfirmDeleteUser} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <input
+                type="password"
+                placeholder="Enter admin password"
+                value={passwordConfirm}
+                onChange={(e) => setPasswordConfirm(e.target.value)}
+                autoFocus
+                style={{
+                  padding: '12px 14px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border-primary)',
+                  background: 'var(--bg-input)',
+                  color: 'var(--text-primary)',
+                  fontSize: '14px',
+                  outline: 'none',
+                  width: '100%'
+                }}
+              />
+
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteModal(false)}
+                  style={{
+                    background: 'transparent',
+                    border: '1px solid var(--border-primary)',
+                    color: 'var(--text-primary)',
+                    padding: '8px 16px',
+                    borderRadius: '6px',
+                    fontSize: '13px',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isDeleting}
+                  style={{
+                    background: 'var(--color-critical-bg)',
+                    color: 'var(--color-critical-text)',
+                    border: '1px solid var(--color-critical-border)',
+                    padding: '8px 16px',
+                    borderRadius: '6px',
+                    fontSize: '13px',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                >
+                  {isDeleting ? 'Deleting...' : 'Confirm Delete'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

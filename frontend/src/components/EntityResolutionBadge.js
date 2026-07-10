@@ -26,7 +26,6 @@ export default function EntityResolutionBadge({ ownerName }) {
 
   const isUnassigned = !ownerName || ownerName.toLowerCase() === 'unassigned' || ownerName.toLowerCase() === 'none';
 
-  // Find user by name match (case-insensitive), first name match, or email match
   const matchedUser = !isUnassigned
     ? users.find((u) => {
         const uNameLower = u.name.toLowerCase();
@@ -40,40 +39,8 @@ export default function EntityResolutionBadge({ ownerName }) {
       })
     : null;
 
-  if (matchedUser) {
-    const initials = getInitials(matchedUser.name);
-    const bgColor = getAvatarColor(matchedUser.name);
+  const displayName = matchedUser ? matchedUser.name : (isUnassigned ? 'Unassigned' : ownerName);
 
-    return (
-      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-        <div
-          style={{
-            width: '28px',
-            height: '28px',
-            borderRadius: '50%',
-            backgroundColor: bgColor,
-            color: '#fff',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: '11px',
-            fontWeight: 700,
-            textShadow: '0 1px 2px rgba(0,0,0,0.15)',
-            boxShadow: '0 2px 4px rgba(0,0,0,0.06)',
-            flexShrink: 0,
-          }}
-          title={`Verified: ${matchedUser.name} (${matchedUser.role})`}
-        >
-          {initials}
-        </div>
-        <span style={{ fontSize: '13px', fontWeight: 550, color: 'var(--text-primary)' }}>
-          {matchedUser.name}
-        </span>
-      </div>
-    );
-  }
-
-  // Fallback / Placeholder for unassigned or raw string
   return (
     <span
       style={{
@@ -83,14 +50,15 @@ export default function EntityResolutionBadge({ ownerName }) {
         padding: '4px 10px',
         borderRadius: '20px',
         background: 'var(--bg-tertiary)',
-        border: '1px solid var(--border-primary)',
+        border: '1px solid var(--border-charcoal)',
         color: 'var(--text-secondary)',
         fontSize: '12px',
         fontWeight: 500,
       }}
+      title={matchedUser ? `Verified: ${matchedUser.name} (${matchedUser.role})` : undefined}
     >
       <span style={{ fontSize: '10px' }}>👤</span>
-      {isUnassigned ? 'Unassigned' : `${ownerName}`}
+      {displayName}
     </span>
   );
 }
