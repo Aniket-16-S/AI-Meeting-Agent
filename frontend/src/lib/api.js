@@ -85,3 +85,68 @@ export async function updateTaskStatus(taskId, status) {
   if (!res.ok) throw new Error('Failed to update task status');
   return res.json();
 }
+
+export async function fetchGoogleStatus(userId) {
+  if (!userId) return { connected: false };
+  const res = await fetch(`${API_BASE}/google/status?user_id=${userId}`);
+  if (!res.ok) throw new Error('Failed to fetch Google status');
+  return res.json();
+}
+
+export async function scheduleGoogleMeeting(userId, organizationId, meetingData) {
+  const res = await fetch(`${API_BASE}/meetings/google?user_id=${userId}&organization_id=${organizationId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(meetingData),
+  });
+  if (!res.ok) {
+    const errData = await res.json();
+    throw new Error(errData.detail || 'Failed to schedule Google Meet');
+  }
+  return res.json();
+}
+
+export async function cancelGoogleMeeting(meetingId) {
+  const res = await fetch(`${API_BASE}/meetings/google/${meetingId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const errData = await res.json();
+    throw new Error(errData.detail || 'Failed to cancel Google Meet');
+  }
+  return res.json();
+}
+
+export async function fetchLatestGoogleMeetings(organizationId, userId) {
+  if (!organizationId || !userId) return [];
+  const res = await fetch(`${API_BASE}/meetings/google/latest?organization_id=${organizationId}&user_id=${userId}`);
+  if (!res.ok) throw new Error('Failed to fetch scheduled meetings');
+  const data = await res.json();
+  return data.meetings || [];
+}
+
+export async function deleteMeeting(meetingId, organizationId) {
+  const res = await fetch(`${API_BASE}/meetings/${meetingId}?organization_id=${organizationId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.detail || 'Failed to delete meeting');
+  }
+  return res.json();
+}
+
+export async function deleteTasksBulk(taskIds) {
+  if (!taskIds || taskIds.length === 0) throw new Error('No task IDs provided');
+  const res = await fetch(`${API_BASE}/tasks/bulk`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task_ids: taskIds }),
+  });
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.detail || 'Failed to bulk delete tasks');
+  }
+  return res.json();
+}
+

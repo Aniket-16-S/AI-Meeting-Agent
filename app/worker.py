@@ -49,6 +49,9 @@ load_dotenv(override=True)
 
 RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 
+# Global event loop reference for embedded deployment
+main_loop = None
+
 
 # ── Name-matching helper ──────────────────────────────────────────────────────
 
@@ -336,7 +339,14 @@ def callback(ch, method, properties, body):
             return
 
         logger.info("Processing message for meeting_id: %s", meeting_id)
-        success = asyncio.run(process_meeting_async(meeting_id))
+        
+        global main_loop
+        if main_loop is not None:
+            logger.info("Running process_meeting_async in main event loop...")
+            future = asyncio.run_coroutine_threadsafe(process_meeting_async(meeting_id), main_loop)
+            success = future.result()
+        else:
+            success = asyncio.run(process_meeting_async(meeting_id))
 
         if success:
             ch.basic_ack(delivery_tag=method.delivery_tag)

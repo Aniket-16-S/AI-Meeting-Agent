@@ -81,16 +81,25 @@ function TasksTab({ tasks, onToggleComplete }) {
               </td>
               <td><StatusBadge status={t.status} /></td>
               <td style={{ textAlign: 'right' }}>
-                {t.status === 'Open' ? (
-                  <button
-                    onClick={() => onToggleComplete(t.id, t.status)}
-                    className="btn-complete"
-                  >
-                    ✓ Mark Complete
-                  </button>
-                ) : (
-                  <span className="text-completed">✓ Completed</span>
-                )}
+                <select
+                  value={t.status}
+                  onChange={(e) => onToggleComplete(t.id, e.target.value)}
+                  style={{
+                    background: t.status === 'Closed' ? 'rgba(34, 197, 94, 0.1)' : t.status === 'In Progress' ? 'hsla(45, 93%, 47%, 0.1)' : 'var(--bg-input)',
+                    color: t.status === 'Closed' ? '#22c55e' : t.status === 'In Progress' ? 'hsl(45, 93%, 40%)' : 'var(--text-primary)',
+                    border: `1px solid ${t.status === 'Closed' ? 'rgba(34, 197, 94, 0.2)' : t.status === 'In Progress' ? 'hsla(45, 93%, 47%, 0.2)' : 'var(--border-primary)'}`,
+                    cursor: 'pointer',
+                    padding: '6px 12px',
+                    borderRadius: '6px',
+                    fontSize: '12px',
+                    fontWeight: 500,
+                    outline: 'none',
+                  }}
+                >
+                  <option value="Open">Open</option>
+                  <option value="In Progress">In Progress</option>
+                  <option value="Closed">Closed</option>
+                </select>
               </td>
             </tr>
           ))}
@@ -134,7 +143,39 @@ function RisksTab({ risks }) {
   );
 }
 
+function formatTranscriptText(text) {
+  if (!text) return '';
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length > 10) {
+    let wordCount = 0;
+    lines.forEach(l => {
+      wordCount += l.split(/\s+/).length;
+    });
+    const avgWordsPerLine = wordCount / lines.length;
+    if (avgWordsPerLine < 2.0) {
+      let result = [];
+      let currentLine = [];
+      lines.forEach(word => {
+        const isSpeakerHeader = /^[A-Z][a-zA-Z0-9_\s]*:$/.test(word) || (word.endsWith(':') && word.length < 30);
+        const isTimestamp = /^\[\d{2}:\d{2}(:\d{2})?\]$/.test(word) || /^\(\d{2}:\d{2}(:\d{2})?\)$/.test(word);
+        if ((isSpeakerHeader || isTimestamp) && currentLine.length > 0) {
+          result.push(currentLine.join(' '));
+          currentLine = [];
+        }
+        currentLine.push(word);
+      });
+      if (currentLine.length > 0) {
+        result.push(currentLine.join(' '));
+      }
+      return result.join('\n\n');
+    }
+  }
+  return text;
+}
+
 function TranscriptTab({ transcript }) {
+  const formatted = useMemo(() => formatTranscriptText(transcript), [transcript]);
+
   if (!transcript) {
     return (
       <EmptyState
@@ -145,7 +186,7 @@ function TranscriptTab({ transcript }) {
     );
   }
 
-  return <div className="transcript-viewer">{transcript}</div>;
+  return <div className="transcript-viewer">{formatted}</div>;
 }
 
 export default function MeetingDetailPage() {
@@ -159,19 +200,41 @@ export default function MeetingDetailPage() {
   const [risks, setRisks] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  const handleToggleComplete = async (taskId, currentStatus) => {
-    const newStatus = currentStatus === 'Open' ? 'Closed' : 'Open';
+  // Check if the logged in user is assigned any tasks in this meeting
+  const userHasTasksInMeeting = useMemo(() => {
+    if (!tasks || !user) return false;
+    const userFirstName = user.name.trim().split(/\s+/)[0].toLowerCase();
+    return tasks.some((t) => {
+      if (!t.owner) return false;
+      const ownerLower = t.owner.toLowerCase();
+      return ownerLower === user.name.toLowerCase() || ownerLower === userFirstName;
+    });
+  }, [tasks, user]);
+
+  // Filter risks to show only High and Critical severity
+  const filteredRisks = useMemo(() => {
+    if (!risks) return [];
+    return risks.filter(r => {
+      const sev = r.severity?.toLowerCase();
+      return sev === 'high' || sev === 'critical';
+    });
+  }, [risks]);
+
+  const handleToggleComplete = async (taskId, newStatus) => {
     try {
       await updateTaskStatus(taskId, newStatus);
       setTasks((prevTasks) =>
         prevTasks?.map((t) => (t.id === taskId ? { ...t, status: newStatus } : t))
       );
-      addToast(
-        newStatus === 'Closed'
-          ? 'Task marked as completed!'
-          : 'Task reopened!',
-        'success'
-      );
+      let msg = 'Task status updated!';
+      if (newStatus === 'Closed') {
+        msg = 'Task marked as completed!';
+      } else if (newStatus === 'In Progress') {
+        msg = 'Task marked as In Progress!';
+      } else if (newStatus === 'Open') {
+        msg = 'Task reopened!';
+      }
+      addToast(msg, 'success');
     } catch (err) {
       addToast(err.message || 'Failed to update task status', 'error');
     }
@@ -193,17 +256,6 @@ export default function MeetingDetailPage() {
       .catch(() => { })
       .finally(() => setLoading(false));
   }, [meetingId, organization?.id]);
-
-  // Check if the logged in user is assigned any tasks in this meeting
-  const userHasTasksInMeeting = useMemo(() => {
-    if (!tasks || !user) return false;
-    const userFirstName = user.name.trim().split(/\s+/)[0].toLowerCase();
-    return tasks.some((t) => {
-      if (!t.owner) return false;
-      const ownerLower = t.owner.toLowerCase();
-      return ownerLower === user.name.toLowerCase() || ownerLower === userFirstName;
-    });
-  }, [tasks, user]);
 
   const hasAccess = isMeetingInDepartment(meetingId, department?.id) || userHasTasksInMeeting;
 
@@ -244,6 +296,8 @@ export default function MeetingDetailPage() {
   }
 
 
+
+
   return (
     <div className="page-animate">
       <div className="page-header">
@@ -275,8 +329,8 @@ export default function MeetingDetailPage() {
           {
             label: 'Risks',
             icon: '⚠️',
-            count: risks?.length || 0,
-            content: <RisksTab risks={risks} />,
+            count: filteredRisks.length,
+            content: <RisksTab risks={filteredRisks} />,
           },
           {
             label: 'Transcript',

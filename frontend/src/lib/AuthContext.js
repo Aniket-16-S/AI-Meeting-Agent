@@ -14,7 +14,7 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
-  // Load active session from sessionStorage on mount
+  // Load active session from sessionStorage on mount with 10-minute inactivity check
   useEffect(() => {
     try {
       const storedCurrentUser = sessionStorage.getItem('saas_current_user');
@@ -23,20 +23,42 @@ export function AuthProvider({ children }) {
       const storedUsers = sessionStorage.getItem('saas_users');
       const storedDepts = sessionStorage.getItem('saas_depts');
 
-      if (storedCurrentUser) {
-        setUser(JSON.parse(storedCurrentUser));
+      const lastActiveStr = localStorage.getItem('saas_last_active');
+      const now = Date.now();
+      let sessionExpired = false;
+      if (lastActiveStr && storedCurrentUser) {
+        const lastActive = parseInt(lastActiveStr, 10);
+        if (now - lastActive > 10 * 60 * 1000) { // 10 minutes
+          sessionExpired = true;
+        }
       }
-      if (storedOrg) {
-        setOrganization(JSON.parse(storedOrg));
-      }
-      if (storedDept) {
-        setDepartment(JSON.parse(storedDept));
-      }
-      if (storedUsers) {
-        setUsers(JSON.parse(storedUsers));
-      }
-      if (storedDepts) {
-        setDepartments(JSON.parse(storedDepts));
+
+      if (sessionExpired) {
+        sessionStorage.clear();
+        localStorage.removeItem('saas_last_active');
+        setUser(null);
+        setOrganization(null);
+        setDepartment(null);
+        setUsers([]);
+        setDepartments([]);
+        router.push('/login');
+      } else {
+        if (storedCurrentUser) {
+          setUser(JSON.parse(storedCurrentUser));
+          localStorage.setItem('saas_last_active', now.toString());
+        }
+        if (storedOrg) {
+          setOrganization(JSON.parse(storedOrg));
+        }
+        if (storedDept) {
+          setDepartment(JSON.parse(storedDept));
+        }
+        if (storedUsers) {
+          setUsers(JSON.parse(storedUsers));
+        }
+        if (storedDepts) {
+          setDepartments(JSON.parse(storedDepts));
+        }
       }
     } catch (e) {
       console.error('Error loading session from sessionStorage', e);
@@ -44,6 +66,27 @@ export function AuthProvider({ children }) {
       setLoading(false);
     }
   }, []);
+
+  // Update last active timestamp on any user action
+  useEffect(() => {
+    if (!user) return;
+
+    const updateActivity = () => {
+      localStorage.setItem('saas_last_active', Date.now().toString());
+    };
+
+    updateActivity();
+
+    window.addEventListener('click', updateActivity);
+    window.addEventListener('keydown', updateActivity);
+    window.addEventListener('scroll', updateActivity);
+
+    return () => {
+      window.removeEventListener('click', updateActivity);
+      window.removeEventListener('keydown', updateActivity);
+      window.removeEventListener('scroll', updateActivity);
+    };
+  }, [user]);
 
   // Sync active department meetings from the backend database
   useEffect(() => {
@@ -103,6 +146,7 @@ export function AuthProvider({ children }) {
       throw new Error(errData.detail || 'Invalid email or password');
     }
     const data = await res.json();
+    localStorage.setItem('saas_last_active', Date.now().toString());
     saveSession(data.user, data.organization, data.department, data.users, data.departments);
     router.push('/');
     return data.user;
@@ -112,6 +156,7 @@ export function AuthProvider({ children }) {
     saveSession(null, null, null);
     sessionStorage.removeItem('saas_users');
     sessionStorage.removeItem('saas_depts');
+    localStorage.removeItem('saas_last_active');
     setUsers([]);
     setDepartments([]);
     router.push('/login');
@@ -134,6 +179,7 @@ export function AuthProvider({ children }) {
       throw new Error(errData.detail || 'Failed to register organization');
     }
     const data = await res.json();
+    localStorage.setItem('saas_last_active', Date.now().toString());
     saveSession(data.user, data.organization, data.department, data.users, data.departments);
     router.push('/');
     return data.user;
@@ -211,6 +257,61 @@ export function AuthProvider({ children }) {
     }
   };
 
+  const deleteUserInContext = async (userId, adminPassword) => {
+    const res = await fetch(`/api/users/${userId}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        admin_email: user.email,
+        password: adminPassword,
+      }),
+    });
+    if (!res.ok) {
+      const errData = await res.json();
+      throw new Error(errData.detail || 'Failed to delete user');
+    }
+    const updatedUsers = users.filter((u) => u.id !== userId);
+    setUsers(updatedUsers);
+    sessionStorage.setItem('saas_users', JSON.stringify(updatedUsers));
+  };
+
+  const deleteDepartmentInContext = async (deptId, adminPassword) => {
+    const res = await fetch(`/api/departments/${deptId}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        admin_email: user.email,
+        password: adminPassword,
+      }),
+    });
+    if (!res.ok) {
+      const errData = await res.json();
+      throw new Error(errData.detail || 'Failed to delete department');
+    }
+    const updatedDepts = departments.filter((d) => d.id !== deptId);
+    setDepartments(updatedDepts);
+    sessionStorage.setItem('saas_depts', JSON.stringify(updatedDepts));
+
+    const updatedUsers = users.map((u) => u.departmentId === deptId ? { ...u, departmentId: null } : u);
+    setUsers(updatedUsers);
+    sessionStorage.setItem('saas_users', JSON.stringify(updatedUsers));
+  };
+
+  const assignUserDepartmentInContext = async (userId, deptId) => {
+    const res = await fetch(`/api/users/${userId}/department`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ department_id: deptId }),
+    });
+    if (!res.ok) {
+      const errData = await res.json();
+      throw new Error(errData.detail || 'Failed to assign department');
+    }
+    const updatedUsers = users.map((u) => u.id === userId ? { ...u, departmentId: deptId } : u);
+    setUsers(updatedUsers);
+    sessionStorage.setItem('saas_users', JSON.stringify(updatedUsers));
+  };
+
   const linkMeetingToDepartment = async (meetingId, deptId) => {
     await fetch(`/api/departments/${deptId}/meetings`, {
       method: 'POST',
@@ -252,6 +353,9 @@ export function AuthProvider({ children }) {
         linkMeetingToDepartment,
         getDepartmentMeetingIds,
         isMeetingInDepartment,
+        deleteUserInContext,
+        deleteDepartmentInContext,
+        assignUserDepartmentInContext,
       }}
     >
       {children}
