@@ -36,17 +36,56 @@ import {
   Line,
 } from 'recharts';
 
+const shortMonths = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function parseDateString(d) {
+  if (!d) return null;
+  const match = String(d).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) {
+    return {
+      year: parseInt(match[1], 10),
+      month: parseInt(match[2], 10) - 1,
+      day: parseInt(match[3], 10),
+    };
+  }
+  try {
+    const dt = new Date(d);
+    if (!isNaN(dt.getTime())) {
+      return {
+        year: dt.getFullYear(),
+        month: dt.getMonth(),
+        day: dt.getDate(),
+      };
+    }
+  } catch {}
+  return null;
+}
+
 function formatDate(d) {
   if (!d) return '-';
-  try {
-    return new Date(d).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    });
-  } catch {
-    return '-';
+  const parsed = parseDateString(d);
+  if (!parsed) return '-';
+  return `${parsed.day} ${shortMonths[parsed.month]}`;
+}
+
+function getDueDateStyle(d, status) {
+  if (!d || status === 'Closed' || status === 'Completed' || status === 'Done') return {};
+  const parsed = parseDateString(d);
+  if (!parsed) return {};
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const due = new Date(parsed.year, parsed.month, parsed.day);
+  due.setHours(0, 0, 0, 0);
+
+  const diffTime = due.getTime() - today.getTime();
+  if (diffTime === 0) {
+    return { color: 'var(--color-high-text)', fontWeight: '600' };
+  } else if (diffTime < 0) {
+    return { color: 'var(--color-critical-text)', fontWeight: '600' };
   }
+  return {};
 }
 
 function formatMeetingPeriod(startStr, endStr) {
@@ -875,7 +914,7 @@ export default function DashboardPage() {
                                     </Link>
                                   )}
                                   {t.due_date && (
-                                    <span>Due: {formatDate(t.due_date)}</span>
+                                    <span>Due: <span style={getDueDateStyle(t.due_date, t.status)}>{formatDate(t.due_date)}</span></span>
                                   )}
                                   <span style={{ textTransform: 'capitalize' }}>Category: {t.category}</span>
                                 </div>
@@ -1136,7 +1175,7 @@ export default function DashboardPage() {
                                   '-'
                                 )}
                               </td>
-                              <td className="td-date">{formatDate(t.due_date)}</td>
+                              <td className="td-date" style={getDueDateStyle(t.due_date, t.status)}>{formatDate(t.due_date)}</td>
                               <td>
                                 <PriorityBadge level={t.priority} />
                               </td>
