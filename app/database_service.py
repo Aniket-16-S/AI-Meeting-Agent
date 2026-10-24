@@ -3,7 +3,7 @@ import json
 import logging
 import uuid
 from typing import List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -19,13 +19,24 @@ logger = logging.getLogger(__name__)
 async def create_database_if_not_exists():
     try:
         url = urlparse(DATABASE_URL)
+        hostname = url.hostname or ""
+
+        # Managed cloud databases (Neon, Render, Supabase, etc.) have pre-created databases
+        # and do not permit connecting to /postgres or running CREATE DATABASE.
+        if "neon.tech" in hostname or "render.com" in hostname or "supabase.co" in hostname:
+            logger.info("Managed database detected (%s). Skipping automatic CREATE DATABASE.", hostname)
+            return
+
         db_name = url.path.lstrip("/")
+        if not db_name:
+            return
 
         # Validate db_name format
         if not db_name.replace("_", "").replace("-", "").isalnum():
             raise ValueError(f"Unexpected database name format: '{db_name}'")
 
-        base_url = DATABASE_URL.rsplit("/", 1)[0] + "/postgres"
+        # Preserve query params and connection details while targeting default 'postgres' database
+        base_url = urlunparse(url._replace(path="/postgres"))
         temp_engine = create_async_engine(base_url, isolation_level="AUTOCOMMIT")
 
         async with temp_engine.connect() as conn:
@@ -42,7 +53,7 @@ async def create_database_if_not_exists():
     except Exception as e:
         logger.warning(
             "Bypassed database creation check. This is normal on managed database "
-            "platforms like Render where the database is pre-created. Error: %s", e
+            "platforms like Neon or Render where the database is pre-created. Error: %s", e
         )
 
 
