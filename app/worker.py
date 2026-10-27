@@ -28,6 +28,7 @@ import datetime
 import json
 import logging
 import os
+import time
 import uuid
 from typing import Optional
 
@@ -353,31 +354,52 @@ def callback(ch, method, properties, body):
             logger.info("Message for meeting_id %s ACKed successfully.", meeting_id)
         else:
             logger.warning("Failed to process meeting %s. Requeueing.", meeting_id)
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+            try:
+                ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+            except Exception:
+                pass
 
     except Exception as exc:
         logger.error("Error in consumer callback: %s", exc, exc_info=True)
-        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+        try:
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+        except Exception:
+            pass
 
 
 def main():
-    logger.info("Connecting to RabbitMQ: %s", RABBITMQ_URL)
-    params = pika.URLParameters(RABBITMQ_URL)
-    params.connection_attempts = 10
-    params.retry_delay = 5
-    params.heartbeat = 600
+    logger.info("Starting RabbitMQ consumer worker for: %s", RABBITMQ_URL)
+    retry_delay = 5
 
-    try:
-        connection = pika.BlockingConnection(params)
-        channel = connection.channel()
-        channel.queue_declare(queue="processing_queue", durable=True)
-        channel.basic_qos(prefetch_count=1)
-        channel.basic_consume(queue="processing_queue", on_message_callback=callback)
-        logger.info("RabbitMQ worker started consuming 'processing_queue'...")
-        channel.start_consuming()
-    except Exception as exc:
-        logger.critical("RabbitMQ consumer worker crashed: %s", exc)
-        raise
+    while True:
+        connection = None
+        try:
+            params = pika.URLParameters(RABBITMQ_URL)
+            params.connection_attempts = 5
+            params.retry_delay = 3
+            params.heartbeat = 600
+            params.blocked_connection_timeout = 300
+
+            logger.info("Connecting to RabbitMQ...")
+            connection = pika.BlockingConnection(params)
+            channel = connection.channel()
+            channel.queue_declare(queue="processing_queue", durable=True)
+            channel.basic_qos(prefetch_count=1)
+            channel.basic_consume(queue="processing_queue", on_message_callback=callback)
+            logger.info("RabbitMQ worker started consuming 'processing_queue'...")
+            channel.start_consuming()
+        except (pika.exceptions.AMQPConnectionError, pika.exceptions.StreamLostError, pika.exceptions.ChannelWrongStateError) as exc:
+            logger.warning("RabbitMQ connection lost (%s). Reconnecting in %ds...", exc, retry_delay)
+            time.sleep(retry_delay)
+        except Exception as exc:
+            logger.error("RabbitMQ worker error: %s. Reconnecting in %ds...", exc, retry_delay, exc_info=True)
+            time.sleep(retry_delay)
+        finally:
+            if connection and not connection.is_closed:
+                try:
+                    connection.close()
+                except Exception:
+                    pass
 
 
 if __name__ == "__main__":
