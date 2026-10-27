@@ -15,6 +15,8 @@ services:
         sync: false
       - key: GROQ_V2
         sync: false
+      - key: groq
+        sync: false
       - key: START_WORKER_IN_BACKEND
         value: "true"
       - key: PORT
@@ -29,6 +31,6 @@ services:
     plan: free
     envVars:
       - key: NEXT_PUBLIC_BACKEND_URL
-        value: http://meeting-agent-backend:8000
+        value: https://meeting-agent-backend-b1dd.onrender.com
       - key: PORT
         value: 3000
